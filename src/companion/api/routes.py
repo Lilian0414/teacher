@@ -1,0 +1,353 @@
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from companion.api.schemas import (
+    CommandRequest,
+    CommandResponse,
+    ConversationResponse,
+    CreateConversationResponse,
+    SendMessageRequest,
+    SendMessageResponse,
+)
+from companion.availability import AvailabilityService, OverrideRequest
+from companion.commands.parser import AVAILABLE_COMMANDS, CommandParser
+from companion.conversation import ConversationNotFoundError, ConversationService
+from companion.memory import (
+    AmbiguousMemoryIdError,
+    MemoryNotFoundError,
+    MemoryService,
+    MemoryValidationError,
+)
+from companion.providers.errors import LLMConfigurationError, LLMProviderError
+from companion.providers.protocols import LLMProvider
+from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest
+from companion.schemas.availability import AvailabilityState, StateResponse
+from companion.settings import get_settings
+
+from .dependencies import (
+    get_availability_service,
+    get_conversation_service,
+    get_llm_provider,
+    get_llm_status,
+    get_memory_service,
+)
+
+router = APIRouter()
+AvailabilityDependency = Depends(get_availability_service)
+ConversationDependency = Depends(get_conversation_service)
+LLMDependency = Depends(get_llm_provider)
+MemoryDependency = Depends(get_memory_service)
+
+
+@router.get("/health")
+async def health() -> dict[str, str | int]:
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "service": "companion_core",
+        "environment": settings.env,
+        "schema_version": settings.schema_version,
+    }
+
+
+@router.get("/v1/state")
+async def state(
+    availability: AvailabilityService = AvailabilityDependency,
+) -> StateResponse:
+    settings = get_settings()
+    snapshot = availability.snapshot()
+    return StateResponse(
+        status="ok",
+        user_id=settings.user_id,
+        availability=snapshot.state,
+        override_expires_at=snapshot.expires_at,
+        timezone=settings.timezone,
+        remaining_seconds=snapshot.remaining_seconds,
+        llm=get_llm_status(),
+    )
+
+
+@router.post("/v1/commands/execute")
+async def execute_command(
+    request: CommandRequest,
+    availability: AvailabilityService = AvailabilityDependency,
+    conversation_service: ConversationService = ConversationDependency,
+    llm_provider: LLMProvider = LLMDependency,
+    memory_service: MemoryService = MemoryDependency,
+) -> CommandResponse:
+    settings = get_settings()
+    parsed = CommandParser(
+        max_busy_duration=timedelta(hours=settings.busy_max_duration_hours)
+    ).parse(request.raw)
+
+    if parsed.name == "busy":
+        duration = parsed.duration or timedelta(minutes=30)
+        snapshot = availability.set_override(
+            OverrideRequest(
+                state=AvailabilityState.BUSY,
+                duration=duration,
+                source="terminal",
+            )
+        )
+        return CommandResponse(
+            command="busy",
+            ok=True,
+            message="Availability changed to busy.",
+            availability=snapshot,
+        )
+
+    if parsed.name == "dnd":
+        snapshot = availability.set_override(
+            OverrideRequest(
+                state=AvailabilityState.DND,
+                duration=None,
+                source="terminal",
+            )
+        )
+        return CommandResponse(
+            command="dnd",
+            ok=True,
+            message="Availability changed to dnd.",
+            availability=snapshot,
+        )
+
+    if parsed.name == "available":
+        snapshot = availability.set_override(
+            OverrideRequest(
+                state=AvailabilityState.AVAILABLE,
+                duration=None,
+                source="terminal",
+            )
+        )
+        return CommandResponse(
+            command="available",
+            ok=True,
+            message="Availability changed to available.",
+            availability=snapshot,
+        )
+
+    snapshot = availability.snapshot()
+    if parsed.name == "status":
+        llm_status = get_llm_status()
+        return CommandResponse(
+            command="status",
+            ok=True,
+            message=(
+                f"Core ok. Availability is {snapshot.state.value}. "
+                f"LLM provider={llm_status.provider} "
+                f"model={llm_status.model or '-'} "
+                f"status={llm_status.status}."
+            ),
+            availability=snapshot,
+        )
+
+    if parsed.name in {"help", "hint", "say"}:
+        if parsed.content is None:
+            return CommandResponse(command="unknown", ok=False, message="Missing command content.")
+        return await _execute_language_command(
+            parsed_name=parsed.name,
+            content=parsed.content,
+            conversation_id=request.conversation_id,
+            conversation_service=conversation_service,
+            llm_provider=llm_provider,
+        )
+
+    if parsed.name == "remember":
+        try:
+            memory = await memory_service.remember(parsed.content or "")
+        except MemoryValidationError as exc:
+            return CommandResponse(command="remember", ok=False, message=str(exc))
+        return CommandResponse(
+            command="remember",
+            ok=True,
+            message=f"Remembered as {memory.short_id}.",
+            memory=memory,
+        )
+
+    if parsed.name == "memories":
+        memories = memory_service.search(parsed.content)
+        return CommandResponse(
+            command="memories",
+            ok=True,
+            message=f"Found {len(memories)} memories.",
+            memories=memories,
+        )
+
+    if parsed.name == "forget":
+        try:
+            if parsed.confirm:
+                memory = memory_service.forget(parsed.content or "")
+                return CommandResponse(
+                    command="forget",
+                    ok=True,
+                    message=f"Forgot memory {memory.short_id}.",
+                    memory=memory,
+                )
+            preview = memory_service.preview_forget(parsed.content or "")
+            return CommandResponse(
+                command="forget",
+                ok=True,
+                message=(
+                    f"Confirm deletion with /forget {preview.memory.short_id} confirm"
+                ),
+                memory=preview.memory,
+                confirmation_required=True,
+            )
+        except AmbiguousMemoryIdError:
+            return CommandResponse(
+                command="forget",
+                ok=False,
+                message="Memory ID is ambiguous; use a longer ID.",
+            )
+        except MemoryNotFoundError:
+            return CommandResponse(
+                command="forget",
+                ok=False,
+                message="Memory not found.",
+            )
+
+    return CommandResponse(
+        command="unknown",
+        ok=False,
+        message=parsed.error or f"Available commands: {AVAILABLE_COMMANDS}",
+        availability=snapshot,
+    )
+
+
+@router.post("/v1/conversations")
+async def create_conversation(
+    conversation_service: ConversationService = ConversationDependency,
+) -> CreateConversationResponse:
+    conversation = conversation_service.create_conversation()
+    return CreateConversationResponse(
+        id=conversation.id,
+        mode=conversation.mode,
+        started_at=conversation.started_at.isoformat(),
+    )
+
+
+@router.get("/v1/conversations/{conversation_id}")
+async def get_conversation(
+    conversation_id: str,
+    conversation_service: ConversationService = ConversationDependency,
+) -> ConversationResponse:
+    try:
+        return ConversationResponse(
+            conversation=conversation_service.get_conversation(conversation_id)
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+
+
+@router.post("/v1/conversations/{conversation_id}/messages")
+async def send_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    conversation_service: ConversationService = ConversationDependency,
+) -> SendMessageResponse:
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Message content is required")
+    try:
+        result = await conversation_service.send_user_message(
+            conversation_id=conversation_id,
+            content=request.content,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    return SendMessageResponse(
+        ok=result.error is None,
+        user_message=result.user_message,
+        assistant_message=result.assistant_message,
+        error=result.error,
+        retryable=result.retryable,
+    )
+
+
+@router.post("/v1/conversations/{conversation_id}/end")
+async def end_conversation(
+    conversation_id: str,
+    conversation_service: ConversationService = ConversationDependency,
+    memory_service: MemoryService = MemoryDependency,
+) -> ConversationResponse:
+    try:
+        conversation = conversation_service.end_conversation(conversation_id)
+        extraction = await memory_service.extract_conversation(conversation_id)
+        return ConversationResponse(
+            conversation=conversation,
+            memory_extraction=extraction,
+        )
+    except ConversationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+
+
+async def _execute_language_command(
+    *,
+    parsed_name: str,
+    content: str,
+    conversation_id: str | None,
+    conversation_service: ConversationService,
+    llm_provider: LLMProvider,
+) -> CommandResponse:
+    mode = LanguageHelpMode(parsed_name)
+    if mode == LanguageHelpMode.SAY and not conversation_id:
+        return CommandResponse(
+            command="say",
+            ok=False,
+            message="/say requires a valid conversation_id.",
+        )
+
+    try:
+        help_response = await llm_provider.provide_language_help(
+            LanguageHelpRequest(mode=mode, content=content)
+        )
+    except LLMConfigurationError as exc:
+        return CommandResponse(command=parsed_name, ok=False, message=str(exc))
+    except LLMProviderError as exc:
+        return CommandResponse(
+            command=parsed_name,
+            ok=False,
+            message=str(exc),
+            retryable=exc.retryable,
+        )
+
+    if mode == LanguageHelpMode.SAY:
+        if not help_response.natural_expression:
+            return CommandResponse(
+                command="say",
+                ok=False,
+                message="No English translation returned.",
+            )
+        try:
+            result = await conversation_service.insert_translated_user_message(
+                conversation_id=conversation_id or "",
+                english_content=help_response.natural_expression,
+            )
+        except ConversationNotFoundError:
+            return CommandResponse(
+                command="say",
+                ok=False,
+                message="/say requires a valid conversation_id.",
+            )
+        return CommandResponse(
+            command="say",
+            ok=result.error is None,
+            message="Inserted translated English into the conversation.",
+            natural_expression=help_response.natural_expression,
+            inserted_into_conversation=True,
+            inserted_text=help_response.natural_expression,
+            assistant_message=result.assistant_message,
+            retryable=result.retryable,
+        )
+
+    return CommandResponse(
+        command=parsed_name,
+        ok=True,
+        message="Language help generated.",
+        natural_expression=help_response.natural_expression,
+        alternatives=help_response.alternatives,
+        notes_zh=help_response.notes_zh,
+        correction=help_response.correction,
+        hints=help_response.hints,
+        inserted_into_conversation=False,
+    )

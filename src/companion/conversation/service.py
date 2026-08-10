@@ -1,0 +1,168 @@
+from dataclasses import dataclass
+
+from companion.clock import Clock, system_clock
+from companion.conversation.repository import ConversationRepository
+from companion.memory.context import MemoryContextBuilder
+from companion.persistence.models import Conversation, Message
+from companion.persistence.repositories import decode_dt
+from companion.providers.errors import LLMProviderError
+from companion.providers.protocols import LLMProvider
+from companion.providers.schemas import ChatMessage, ChatRequest
+from companion.schemas.conversation import ConversationSchema, MessageRole, MessageSchema
+
+
+@dataclass(frozen=True)
+class SendMessageResult:
+    user_message: MessageSchema
+    assistant_message: MessageSchema | None
+    error: str | None
+    retryable: bool
+
+
+class ConversationNotFoundError(Exception):
+    pass
+
+
+class ConversationService:
+    def __init__(
+        self,
+        *,
+        repository: ConversationRepository,
+        llm_provider: LLMProvider,
+        clock: Clock = system_clock,
+        user_id: str = "default",
+        context_limit: int = 20,
+        memory_context_builder: MemoryContextBuilder | None = None,
+    ) -> None:
+        self._repository = repository
+        self._llm_provider = llm_provider
+        self._clock = clock
+        self._user_id = user_id
+        self._context_limit = context_limit
+        self._memory_context_builder = memory_context_builder
+
+    def create_conversation(self) -> ConversationSchema:
+        conversation = self._repository.create_conversation(
+            user_id=self._user_id,
+            started_at=self._clock(),
+        )
+        return self._conversation_schema(conversation)
+
+    def get_conversation(self, conversation_id: str) -> ConversationSchema:
+        conversation = self._require_conversation(conversation_id)
+        messages = self._repository.list_messages(conversation_id)
+        return self._conversation_schema(conversation, messages)
+
+    def end_conversation(self, conversation_id: str) -> ConversationSchema:
+        conversation = self._repository.end_conversation(
+            conversation_id=conversation_id,
+            ended_at=self._clock(),
+        )
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        messages = self._repository.list_messages(conversation_id)
+        return self._conversation_schema(conversation, messages)
+
+    async def send_user_message(self, *, conversation_id: str, content: str) -> SendMessageResult:
+        self._require_conversation(conversation_id)
+        user_message = self._repository.add_message(
+            conversation_id=conversation_id,
+            role=MessageRole.USER,
+            content=content,
+            language="en",
+            source="terminal",
+            created_at=self._clock(),
+        )
+        try:
+            assistant_content = await self._generate_assistant_reply(
+                conversation_id,
+                current_message=content,
+            )
+        except LLMProviderError as exc:
+            return SendMessageResult(
+                user_message=self._message_schema(user_message),
+                assistant_message=None,
+                error=str(exc),
+                retryable=exc.retryable,
+            )
+
+        assistant_message = self._repository.add_message(
+            conversation_id=conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=assistant_content,
+            language="en",
+            source="terminal",
+            created_at=self._clock(),
+        )
+        return SendMessageResult(
+            user_message=self._message_schema(user_message),
+            assistant_message=self._message_schema(assistant_message),
+            error=None,
+            retryable=False,
+        )
+
+    async def insert_translated_user_message(
+        self,
+        *,
+        conversation_id: str,
+        english_content: str,
+    ) -> SendMessageResult:
+        return await self.send_user_message(
+            conversation_id=conversation_id,
+            content=english_content,
+        )
+
+    async def _generate_assistant_reply(
+        self,
+        conversation_id: str,
+        *,
+        current_message: str,
+    ) -> str:
+        recent = self._repository.recent_messages(
+            conversation_id=conversation_id,
+            limit=self._context_limit,
+        )
+        messages = [
+            ChatMessage(role=message.role, content=message.content)
+            for message in recent
+            if message.role in {MessageRole.USER.value, MessageRole.ASSISTANT.value}
+        ]
+        if self._memory_context_builder is not None:
+            memory_context = self._memory_context_builder.build(current_message)
+            if memory_context:
+                messages.insert(0, ChatMessage(role="system", content=memory_context))
+        response = await self._llm_provider.chat(ChatRequest(messages=messages))
+        return response.content
+
+    def _require_conversation(self, conversation_id: str) -> Conversation:
+        conversation = self._repository.get_conversation(conversation_id)
+        if conversation is None:
+            raise ConversationNotFoundError(conversation_id)
+        return conversation
+
+    def _conversation_schema(
+        self,
+        conversation: Conversation,
+        messages: list[Message] | None = None,
+    ) -> ConversationSchema:
+        return ConversationSchema(
+            id=conversation.id,
+            user_id=conversation.user_id,
+            mode=conversation.mode,
+            private_mode=conversation.private_mode,
+            started_at=decode_dt(conversation.started_at),
+            ended_at=decode_dt(conversation.ended_at) if conversation.ended_at else None,
+            messages=[self._message_schema(message) for message in messages or []],
+        )
+
+    @staticmethod
+    def _message_schema(message: Message) -> MessageSchema:
+        return MessageSchema(
+            id=message.id,
+            conversation_id=message.conversation_id,
+            role=MessageRole(message.role),
+            content=message.content,
+            language=message.language,
+            source=message.source,
+            created_at=decode_dt(message.created_at),
+        )
