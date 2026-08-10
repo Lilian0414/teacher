@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from companion.availability import AvailabilityService
 from companion.conversation import ConversationRepository, ConversationService
+from companion.learning import LearningContextBuilder, LearningRepository, LearningService
 from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryService
 from companion.persistence.database import get_session
 from companion.persistence.repositories import AvailabilityRepository
@@ -79,6 +80,11 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
                 memory_repository,
                 limit=settings.memory_context_limit,
             ),
+            learning_context_builder=LearningContextBuilder(
+                LearningRepository(session),
+                user_id=settings.user_id,
+                limit=settings.learning_context_limit,
+            ),
         )
 
 
@@ -89,4 +95,13 @@ def get_memory_service() -> Generator[MemoryService, None, None]:
             repository=MemoryRepository(session),
             conversation_repository=ConversationRepository(session),
             llm_provider=provider,
+        )
+
+
+def get_learning_service() -> Generator[LearningService, None, None]:
+    for session in get_session():
+        settings = get_settings()
+        yield LearningService(
+            repository=LearningRepository(session),
+            user_id=settings.user_id,
         )

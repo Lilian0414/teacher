@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
+from companion.learning.context import LearningContextBuilder
 from companion.memory.context import MemoryContextBuilder
 from companion.persistence.models import Conversation, Message
 from companion.persistence.repositories import decode_dt
@@ -33,6 +34,7 @@ class ConversationService:
         user_id: str = "default",
         context_limit: int = 20,
         memory_context_builder: MemoryContextBuilder | None = None,
+        learning_context_builder: LearningContextBuilder | None = None,
     ) -> None:
         self._repository = repository
         self._llm_provider = llm_provider
@@ -40,6 +42,7 @@ class ConversationService:
         self._user_id = user_id
         self._context_limit = context_limit
         self._memory_context_builder = memory_context_builder
+        self._learning_context_builder = learning_context_builder
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -127,10 +130,17 @@ class ConversationService:
             for message in recent
             if message.role in {MessageRole.USER.value, MessageRole.ASSISTANT.value}
         ]
+        contexts: list[str] = []
         if self._memory_context_builder is not None:
             memory_context = self._memory_context_builder.build(current_message)
             if memory_context:
-                messages.insert(0, ChatMessage(role="system", content=memory_context))
+                contexts.append(memory_context)
+        if self._learning_context_builder is not None:
+            learning_context = self._learning_context_builder.build(self._clock())
+            if learning_context:
+                contexts.append(learning_context)
+        if contexts:
+            messages.insert(0, ChatMessage(role="system", content="\n\n".join(contexts)))
         response = await self._llm_provider.chat(ChatRequest(messages=messages))
         return response.content
 

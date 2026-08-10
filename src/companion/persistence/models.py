@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from companion.persistence.database import Base
@@ -76,3 +76,38 @@ class Memory(Base):
     status: Mapped[str] = mapped_column(String(16), index=True)
     created_at: Mapped[str] = mapped_column(String(40), index=True)
     updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class LearningItem(Base):
+    __tablename__ = "learning_items"
+    __table_args__ = (
+        UniqueConstraint("user_id", "normalized_prompt", "kind"),
+        Index("ix_learning_items_due", "user_id", "next_review_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    normalized_prompt: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(24))
+    accepted_answers: Mapped[str] = mapped_column(Text)
+    source_command: Mapped[str] = mapped_column(String(16))
+    stage: Mapped[int] = mapped_column(Integer, default=0)
+    next_review_at: Mapped[str] = mapped_column(String(40), index=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))
+
+
+class LearningAttempt(Base):
+    __tablename__ = "learning_attempts"
+    __table_args__ = (Index("ix_learning_attempts_history", "learning_item_id", "attempted_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    learning_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("learning_items.id"), index=True
+    )
+    submitted_answer: Mapped[str] = mapped_column(Text)
+    correct: Mapped[bool] = mapped_column(Boolean)
+    stage_before: Mapped[int] = mapped_column(Integer)
+    stage_after: Mapped[int] = mapped_column(Integer)
+    attempted_at: Mapped[str] = mapped_column(String(40))

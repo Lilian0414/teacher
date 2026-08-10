@@ -15,6 +15,8 @@ CommandName = Literal[
     "remember",
     "memories",
     "forget",
+    "review",
+    "review_quit",
     "unknown",
 ]
 
@@ -22,6 +24,7 @@ AVAILABLE_COMMANDS = (
     "/busy <duration>, /dnd, /available, /status, "
     "/help <內容>, /hint <內容>, /say <中文>, "
     "/remember <內容>, /memories [關鍵字], /forget <id> [confirm]"
+    ", /review, /review quit"
 )
 
 
@@ -100,6 +103,13 @@ class CommandParser:
                 content=parts[1],
                 confirm=len(parts) == 3,
             )
+
+        if command == "/review":
+            if len(parts) == 1:
+                return ParsedCommand(name="review")
+            if len(parts) == 2 and parts[1].lower() == "quit":
+                return ParsedCommand(name="review_quit")
+            return ParsedCommand(name="unknown", error="Usage: /review [quit]")
 
         return ParsedCommand(
             name="unknown",

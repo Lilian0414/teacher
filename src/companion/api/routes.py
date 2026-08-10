@@ -7,12 +7,20 @@ from companion.api.schemas import (
     CommandResponse,
     ConversationResponse,
     CreateConversationResponse,
+    ReviewStateResponse,
+    ReviewSubmissionResponse,
     SendMessageRequest,
     SendMessageResponse,
 )
 from companion.availability import AvailabilityService, OverrideRequest
 from companion.commands.parser import AVAILABLE_COMMANDS, CommandParser
 from companion.conversation import ConversationNotFoundError, ConversationService
+from companion.learning import (
+    LearningItemNotDueError,
+    LearningItemNotFoundError,
+    LearningService,
+    ReviewAnswerRequest,
+)
 from companion.memory import (
     AmbiguousMemoryIdError,
     MemoryNotFoundError,
@@ -28,6 +36,7 @@ from companion.settings import get_settings
 from .dependencies import (
     get_availability_service,
     get_conversation_service,
+    get_learning_service,
     get_llm_provider,
     get_llm_status,
     get_memory_service,
@@ -38,6 +47,7 @@ AvailabilityDependency = Depends(get_availability_service)
 ConversationDependency = Depends(get_conversation_service)
 LLMDependency = Depends(get_llm_provider)
 MemoryDependency = Depends(get_memory_service)
+LearningDependency = Depends(get_learning_service)
 
 
 @router.get("/health")
@@ -75,6 +85,7 @@ async def execute_command(
     conversation_service: ConversationService = ConversationDependency,
     llm_provider: LLMProvider = LLMDependency,
     memory_service: MemoryService = MemoryDependency,
+    learning_service: LearningService = LearningDependency,
 ) -> CommandResponse:
     settings = get_settings()
     parsed = CommandParser(
@@ -151,6 +162,24 @@ async def execute_command(
             conversation_id=request.conversation_id,
             conversation_service=conversation_service,
             llm_provider=llm_provider,
+            learning_service=learning_service,
+        )
+
+    if parsed.name == "review":
+        question = learning_service.first_due()
+        return CommandResponse(
+            command="review",
+            ok=True,
+            message="Review complete." if question is None else "Review started.",
+            review_question=question,
+            review_complete=question is None,
+        )
+
+    if parsed.name == "review_quit":
+        return CommandResponse(
+            command="review_quit",
+            ok=True,
+            message="Review stopped.",
         )
 
     if parsed.name == "remember":
@@ -188,9 +217,7 @@ async def execute_command(
             return CommandResponse(
                 command="forget",
                 ok=True,
-                message=(
-                    f"Confirm deletion with /forget {preview.memory.short_id} confirm"
-                ),
+                message=(f"Confirm deletion with /forget {preview.memory.short_id} confirm"),
                 memory=preview.memory,
                 confirmation_required=True,
             )
@@ -281,6 +308,29 @@ async def end_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
 
 
+@router.get("/v1/review")
+async def get_review(
+    learning_service: LearningService = LearningDependency,
+) -> ReviewStateResponse:
+    question = learning_service.first_due()
+    return ReviewStateResponse(question=question, complete=question is None)
+
+
+@router.post("/v1/review/{item_id}/answer")
+async def submit_review_answer(
+    item_id: str,
+    request: ReviewAnswerRequest,
+    learning_service: LearningService = LearningDependency,
+) -> ReviewSubmissionResponse:
+    try:
+        result = learning_service.answer(item_id=item_id, answer=request.answer)
+    except LearningItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Learning item not found") from exc
+    except LearningItemNotDueError as exc:
+        raise HTTPException(status_code=409, detail="Learning item is no longer due") from exc
+    return ReviewSubmissionResponse(result=result)
+
+
 async def _execute_language_command(
     *,
     parsed_name: str,
@@ -288,6 +338,7 @@ async def _execute_language_command(
     conversation_id: str | None,
     conversation_service: ConversationService,
     llm_provider: LLMProvider,
+    learning_service: LearningService,
 ) -> CommandResponse:
     mode = LanguageHelpMode(parsed_name)
     if mode == LanguageHelpMode.SAY and not conversation_id:
@@ -340,6 +391,12 @@ async def _execute_language_command(
             retryable=result.retryable,
         )
 
+    learning_item = learning_service.capture_assistance(
+        mode=mode,
+        prompt=content,
+        response=help_response,
+    )
+
     return CommandResponse(
         command=parsed_name,
         ok=True,
@@ -350,4 +407,5 @@ async def _execute_language_command(
         correction=help_response.correction,
         hints=help_response.hints,
         inserted_into_conversation=False,
+        learning_item=learning_item,
     )

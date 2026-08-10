@@ -40,3 +40,9 @@ def test_parse_m2_memory_commands() -> None:
     assert forget.name == "forget"
     assert forget.content == "abc12345"
     assert forget.confirm is True
+
+
+def test_parse_interactive_review_commands() -> None:
+    assert CommandParser().parse("/review").name == "review"
+    assert CommandParser().parse("/review quit").name == "review_quit"
+    assert CommandParser().parse("/review later").name == "unknown"
