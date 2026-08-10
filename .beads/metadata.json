@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "teacher",
+  "project_id": "70acc5d2-a50a-452f-af35-7bc0c3ea5e61"
+}

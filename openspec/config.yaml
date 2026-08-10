@@ -1,0 +1,35 @@
+schema: spec-driven
+
+context: |
+  Project: Mac-first AI English learning companion.
+  Current baseline: M0 foundation, M1 text chat, and simplified M2 long-term memory.
+  Stack: Python 3.12, FastAPI, Textual, SQLite, SQLAlchemy 2, Alembic, Pydantic v2.
+  Quality gates: Ruff, strict mypy, pytest.
+  Automated tests must use FakeLLMProvider. Groq is only used in opt-in live tests.
+  API keys, SQLite databases, conversations, memories, audio, and local model files must not enter Git.
+  UI communicates with Core through HTTP and must not access the database or LLM directly.
+  Deterministic policy code controls commands, privacy, memory permissions, scheduling, and destructive actions.
+  Implement only one approved milestone at a time.
+
+rules:
+  proposal:
+    - State the user problem, scope, non-goals, and measurable outcome.
+    - Prefer the smallest implementation that demonstrates the feature.
+  specs:
+    - Every requirement must contain testable WHEN/THEN scenarios.
+    - Resolve conflicts with existing behavior explicitly.
+  design:
+    - Reuse existing providers, services, repositories, schemas, and migrations.
+    - Do not add large agent frameworks or vector databases without approval.
+  tasks:
+    - Keep tasks small and ordered by dependency.
+    - Include tests and documentation updates in the relevant task.
+    - Every task must reference the requirement it implements.
+
+operations:
+  apply:
+    guidance:
+      - Do not change approved requirements while implementing.
+      - Run targeted tests during implementation.
+      - Finish with Ruff, mypy, and the complete pytest suite.
+      - Never run live Groq tests unless explicitly requested.
