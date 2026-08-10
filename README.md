@@ -17,7 +17,11 @@ Mac-only M2 implementation for the AI English learning companion.
   sending a message.
 - `/say <中文>` translates one utterance, stores it as the current conversation's user message,
   and continues with the normal assistant reply.
-- Long-term people and event memories stored in SQLite and extracted when a conversation ends.
+- Long-term memories stored in SQLite with categories `people`, `personal`, `school_work`,
+  `relationships`, `health_fitness`, and `other`.
+- Memory statuses are limited to `active` and soft-deleted `deleted`.
+- Conversation-end extraction considers only persisted user messages and applies deterministic
+  source, trivial-content, and exact-duplicate checks before storage.
 - Relevant-memory recall adds at most five matching memories to normal chat context.
 - Memory management commands: `/remember`, `/memories`, and confirmed `/forget`.
 - LLM provider interface with `FakeLLMProvider` for tests and `GroqLLMProvider` for live use.
@@ -41,8 +45,10 @@ to the configured LLM; it never sends the complete memory database.
 
 ## Not Implemented In M2
 
-Memory extraction, people/memory CRUD, learning review, scheduler, proactive invitations,
-voice, hardware, webcam, file tools, LangChain, Mem0 and Letta.
+Private conversations, memory sensitivity levels, candidate approval, audit history, conflict
+states, memory editing, proactive-use permissions, learning review, scheduling, proactive
+invitations, voice, hardware, webcam, and file tools are future work. LangChain, Mem0, and Letta
+are intentionally outside the current architecture.
 
 ## Setup
 

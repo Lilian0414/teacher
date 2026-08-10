@@ -1,4 +1,4 @@
-# Mac 第一版共用架構規則
+# Mac M0–M2 共用架構
 
 ## 技術棧
 
@@ -8,116 +8,72 @@
 | API | FastAPI、Uvicorn |
 | Terminal UI | Textual |
 | Database | SQLite |
-| ORM | SQLAlchemy 2.x |
-| Migration | Alembic |
-| Schema | Pydantic v2 |
-| Settings | Pydantic Settings |
-| Scheduler | APScheduler 3.x，M4 才加入 |
+| ORM／Migration | SQLAlchemy 2.x、Alembic |
+| Schema／Settings | Pydantic v2、Pydantic Settings |
 | Tests | pytest、pytest-asyncio |
-| Lint／format | Ruff |
-| Type check | mypy |
+| Lint／Type check | Ruff、strict mypy |
 
-不要加入 LangChain、Letta、Mem0 或其他大型 agent framework。
+目前不使用 LangChain、Letta、Mem0、向量資料庫或大型 agent framework。
 
-## 元件
+## 元件與邊界
 
 ```text
 Textual UI
     │ HTTP
     ▼
 FastAPI Companion Core
-    ├── Command Service
+    ├── Availability / Command policy
     ├── Conversation Service
-    ├── Memory Service
-    ├── Learning Service
-    ├── Proactive Scheduler
+    ├── Memory Service / Context Builder
     ├── LLM Provider
-    ├── Speech Provider
-    └── SQLite Database
+    └── SQLite repositories
 ```
 
-## 必須遵守的規則
-
-1. UI 不直接存取資料庫或外部 AI，只呼叫 Core API。
-2. 勿擾、主動邀請、記憶權限與安全政策由 deterministic code 判斷，不交給 LLM。
-3. 外部 LLM、STT、TTS 都置於 provider interface 後方。
-4. 自動測試使用 fake provider，不呼叫真實 API。
-5. 真實 API 只在明確啟用的 live smoke test 中呼叫。
-6. API key 只由環境變數讀取，不可寫入程式碼、測試、log 或 Git。
-7. 所有時間保存含時區的 ISO 8601，預設時區為 `Asia/Taipei`。
-8. `data/`、`.env`、SQLite、對話、記憶、音訊與模型檔不得提交 Git。
-9. 每個 milestone 完成時必須通過 Ruff、mypy 與 pytest。
-10. 不得提前實作未被目前 milestone 要求的功能。
+- UI 只透過 HTTP 呼叫 Core，不直接存取資料庫或 LLM。
+- command 名稱、availability、記憶來源驗證、刪除確認與 recall limit 都由
+  deterministic code 控制。
+- 外部 LLM 位於 provider interface 後方。
+- 自動測試使用 fake provider；Groq 只允許在明確 opt-in 的 live tests 中使用。
+- provider error 是受控錯誤，不得冒充 assistant message。
 
 ## Repository 結構
 
 ```text
-companion/
+teacher/
 ├── README.md
-├── pyproject.toml
-├── .env.example
-├── .gitignore
-├── alembic.ini
-├── migrations/
-├── docs/
+├── doc/
 │   ├── PROJECT_OVERVIEW.md
 │   ├── ARCHITECTURE.md
-│   └── milestones/
-├── src/
-│   └── companion/
-│       ├── api/
-│       ├── commands/
-│       ├── conversation/
-│       ├── memory/
-│       ├── learning/
-│       ├── proactive/
-│       ├── providers/
-│       ├── persistence/
-│       ├── schemas/
-│       ├── settings.py
-│       └── main.py
+│   ├── M0_FOUNDATION.md
+│   ├── M1_TEXT_CHAT.md
+│   └── M2_MEMORY.md
+├── openspec/
+├── migrations/
+├── src/companion/
+│   ├── api/
+│   ├── commands/
+│   ├── conversation/
+│   ├── memory/
+│   ├── providers/
+│   ├── persistence/
+│   ├── schemas/
+│   ├── settings.py
+│   └── main.py
 ├── terminal_ui/
 ├── tests/
 │   ├── unit/
 │   ├── integration/
 │   └── live/
 └── data/
-    └── .gitkeep
 ```
 
-尚未使用的模組目錄可以先保留空白或延後建立，不得為填滿目錄提前撰寫功能。
+`learning/` 與 `proactive/` 目前沒有已完成行為；其存在不代表 M3／M4 已實作。
 
-## Provider 原則
+## 安全與品質規則
 
-M1 起使用：
-
-```python
-class LLMProvider(Protocol):
-    async def chat(self, request: ChatRequest) -> ChatResponse: ...
-    async def provide_language_help(
-        self, request: LanguageHelpRequest
-    ) -> LanguageHelpResponse: ...
-```
-
-至少提供：
-
-- `FakeLLMProvider`：自動測試。
-- `GroqLLMProvider`：實際使用。
-
-一般 pytest 不得呼叫 Groq。真實測試必須：
-
-```bash
-RUN_LIVE_API_TESTS=1 pytest tests/live/
-```
-
-未設定 `RUN_LIVE_API_TESTS=1` 時，live tests 必須自動 skip。
-
-## 安全與隱私
-
-- `.env.example` 只包含空白或假值。
-- `.env` 必須在 `.gitignore`。
-- 錯誤訊息及 log 不得包含 API key。
-- 第一版不讀取使用者檔案、螢幕或其他 App 資料。
-- 第一版不執行 shell command。
-- Private conversation 不建立長期記憶。
-- 語音階段的原始錄音預設在成功轉錄後刪除。
+1. API key 只從環境變數或本機 `.env` 讀取。
+2. `.env`、SQLite、對話、記憶、音訊與模型檔不得提交 Git。
+3. 錯誤、log 與測試輸出不得包含 API key。
+4. 時間以含時區的 ISO 8601 保存，預設時區為 `Asia/Taipei`。
+5. 每個 milestone 必須通過 Ruff、strict mypy 與完整一般 pytest。
+6. 未經新 OpenSpec change 核准，不提前實作後續 milestone。

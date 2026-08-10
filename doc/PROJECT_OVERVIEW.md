@@ -2,84 +2,44 @@
 
 ## 專題目標
 
-開發一套常駐於 macOS 的 AI 英文學習陪伴助手。第一版只支援 MacBook Pro M2。
+本專題要在 macOS 上建立一套 AI 英文學習陪伴助手。長期方向包含英文對話、
+個人記憶、學習複習、主動邀請與語音互動；目前完成範圍只到 M2。
 
-系統核心功能：
+## 目前完成的 M0–M2
 
-1. 以文字或語音進行英文日常對話。
-2. 根據使用者設定、學習進度與過往互動，在合適時間主動邀請練習。
-3. 保存經篩選的長期生活記憶，延續先前話題。
-4. 記錄使用者不熟悉的單字與句型，安排後續複習。
-5. 使用者不會用英文表達時，可透過中文指令取得協助。
-6. 使用者可拒絕、延後或關閉主動邀請。
+- FastAPI Core、Textual 終端介面、SQLite、SQLAlchemy 2.x 與 Alembic。
+- `available`、`busy`、`dnd` 狀態及 deterministic slash-command parser。
+- 可保存 user／assistant 訊息的英文文字對話。
+- `/help`、`/hint`、`/say` 三個語言救援指令。
+- `/remember`、`/memories`、需確認的 `/forget`。
+- 對話結束時從 user messages 抽取記憶，並由 deterministic policy 驗證來源、
+  無效寒暄與完全重複內容。
+- 每次聊天最多加入五筆與目前訊息相關的 active memories。
+- Fake provider 自動測試，以及明確 opt-in 的 Groq live tests。
 
-## 主要使用流程
-
-AI 主動詢問：
-
-```text
-Do you have a minute to practice English?
-```
-
-使用者接受後，AI 可依長期記憶延續先前話題：
+語言救援的差異：
 
 ```text
-How has Andy been doing since he changed jobs?
+/help <內容>  提供自然英文，或用中文解釋英文；不代入對話
+/hint <內容>  只提供一至三個單字、片語或未完成句型；不代入對話
+/say <中文>   翻成一句自然英文，代入目前對話並取得正常回覆
 ```
 
-若使用者不會表達，可輸入：
+## 尚未完成
 
-```text
-/help 我不會說出軌，Anny 跟 Larry 出軌了
-```
-
-AI 提供自然英文與簡短中文說明，但不自動把回答代入對話：
-
-```text
-Anny cheated on her partner with Larry.
-Anny and Larry had an affair.
-```
-
-其他語言協助指令：
-
-```text
-/hint <內容>     只提供關鍵字或句型
-/say <中文>      翻成英文並代入目前對話
-/explain <英文>  以中文簡短解釋
-```
-
-## Mac 第一版範圍
-
-第一版包含：
-
-- Textual 終端介面。
-- FastAPI 背景服務。
-- 英文文字對話。
-- 中文語言救援指令。
-- 對話紀錄與長期記憶。
-- 英文學習紀錄與複習。
-- 規則式主動邀請。
-- Mac 麥克風、語音辨識與語音輸出。
-
-第一版不包含：
-
-- Raspberry Pi、MQTT 或其他硬體。
-- 鏡頭、手勢、臉部或情緒辨識。
-- 螢幕監控。
-- 檔案修改或 shell command。
-- 多 agent。
-- 日文、國考或其他學習模組。
-- 音素級發音評分。
+M2 不包含 private conversation、記憶敏感度、candidate approval、audit history、
+衝突狀態、記憶編輯或 proactive-use permissions。英文學習紀錄、複習排程、
+主動邀請、語音、硬體、鏡頭和檔案工具也尚未實作。
 
 ## 開發里程碑
 
-| Milestone | 內容 |
-|---|---|
-| M0 | 專案骨架、Core、UI、SQLite、狀態與測試 |
-| M1 | Groq 文字對話與 `/help` 等語言指令 |
-| M2 | 可管理的長期記憶 |
-| M3 | 英文學習紀錄與複習閉環 |
-| M4 | 主動邀請與勿擾排程 |
-| M5 | Mac 語音輸入與輸出 |
+| Milestone | 狀態 | 內容 |
+|---|---|---|
+| M0 | 已完成 | 專案骨架、Core、UI、SQLite、availability 與測試 |
+| M1 | 已完成 | Groq 文字對話與三個語言救援指令 |
+| M2 | 已完成 | 精簡版長期記憶、抽取、搜尋、刪除與 recall |
+| M3 | 未開始 | 英文學習紀錄與複習閉環 |
+| M4 | 未開始 | 主動邀請與排程 |
+| M5 | 未開始 | Mac 語音輸入與輸出 |
 
-每次只能實作一個 milestone。完成、測試及檢查後，才能讀取下一個 milestone 規格。
+每次只實作一個經核准的 milestone；完成後必須通過 Ruff、strict mypy 與 pytest。
