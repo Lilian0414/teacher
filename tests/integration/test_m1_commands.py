@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 from companion.api.dependencies import (
     get_availability_service,
     get_conversation_service,
+    get_learning_service,
     get_llm_provider,
 )
 from companion.availability import AvailabilityService
 from companion.conversation import ConversationRepository, ConversationService
+from companion.learning import LearningRepository, LearningService
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
@@ -25,6 +27,9 @@ def make_client() -> TestClient:
     session = Session(engine)
     now = datetime(2026, 7, 19, 12, tzinfo=UTC)
     provider = FakeLLMProvider()
+    learning_service = LearningService(
+        repository=LearningRepository(session), clock=lambda: now, user_id="default"
+    )
 
     def override_availability() -> Generator[AvailabilityService, None, None]:
         yield AvailabilityService(
@@ -46,6 +51,7 @@ def make_client() -> TestClient:
     app.dependency_overrides[get_availability_service] = override_availability
     app.dependency_overrides[get_conversation_service] = override_conversation
     app.dependency_overrides[get_llm_provider] = lambda: provider
+    app.dependency_overrides[get_learning_service] = lambda: learning_service
     return TestClient(app)
 
 
@@ -54,6 +60,9 @@ def make_client_with_provider(provider: RecordingLLMProvider) -> TestClient:
     Base.metadata.create_all(bind=engine)
     session = Session(engine)
     now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    learning_service = LearningService(
+        repository=LearningRepository(session), clock=lambda: now, user_id="default"
+    )
 
     def override_availability() -> Generator[AvailabilityService, None, None]:
         yield AvailabilityService(
@@ -75,6 +84,7 @@ def make_client_with_provider(provider: RecordingLLMProvider) -> TestClient:
     app.dependency_overrides[get_availability_service] = override_availability
     app.dependency_overrides[get_conversation_service] = override_conversation
     app.dependency_overrides[get_llm_provider] = lambda: provider
+    app.dependency_overrides[get_learning_service] = lambda: learning_service
     return TestClient(app)
 
 

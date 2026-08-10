@@ -28,7 +28,11 @@ class CompanionTerminal(App[None]):
     def __init__(self, core_url: str = "http://127.0.0.1:8000") -> None:
         super().__init__()
         self._core_url = core_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self._core_url, timeout=40.0)
+        self._client = httpx.AsyncClient(
+            base_url=self._core_url,
+            timeout=40.0,
+            trust_env=False,
+        )
         self._status = Static(
             "Core: unknown | Availability: unknown | Remaining: - | LLM: unknown",
             id="status",
@@ -39,6 +43,7 @@ class CompanionTerminal(App[None]):
             id="command",
         )
         self._conversation_id: str | None = None
+        self._active_review_item_id: str | None = None
         self._waiting = False
 
     def compose(self) -> ComposeResult:
@@ -69,6 +74,8 @@ class CompanionTerminal(App[None]):
         try:
             if raw.startswith("/"):
                 await self._send_command(raw)
+            elif self._active_review_item_id is not None:
+                await self._submit_review_answer(raw)
             else:
                 await self._send_chat_message(raw)
         except (httpx.HTTPError, ValueError) as exc:
@@ -98,8 +105,35 @@ class CompanionTerminal(App[None]):
         response.raise_for_status()
         result = response.json()
         self._messages.write(self._format_command_result(result))
+        command = result.get("command")
+        if command == "review" and result.get("ok"):
+            question = result.get("review_question")
+            self._active_review_item_id = (
+                str(question["id"]) if isinstance(question, dict) else None
+            )
+        elif command == "review_quit" and result.get("ok"):
+            self._active_review_item_id = None
         if result.get("availability") is not None:
             self._update_status(result)
+
+    async def _submit_review_answer(self, answer: str) -> None:
+        item_id = self._active_review_item_id
+        if item_id is None:
+            return
+        response = await self._client.post(
+            f"/v1/review/{item_id}/answer",
+            json={"answer": answer},
+        )
+        response.raise_for_status()
+        payload = cast(dict[str, Any], response.json())
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("Invalid review response")
+        self._messages.write(self._format_review_result(result))
+        next_question = result.get("next_question")
+        self._active_review_item_id = (
+            str(next_question["id"]) if isinstance(next_question, dict) else None
+        )
 
     async def _send_chat_message(self, raw: str) -> None:
         await self.ensure_conversation()
@@ -196,6 +230,13 @@ class CompanionTerminal(App[None]):
             if assistant is not None:
                 lines.append(f"assistant: {assistant['content']}")
             return "\n".join(lines)
+        if command == "review":
+            question = payload.get("review_question")
+            if not isinstance(question, dict):
+                return "[review] No items are due. Review complete."
+            return CompanionTerminal._format_review_question(question)
+        if command == "review_quit":
+            return "[review] Review stopped."
         if command == "remember":
             memory = payload.get("memory")
             if isinstance(memory, dict):
@@ -218,6 +259,28 @@ class CompanionTerminal(App[None]):
                 )
             return f"[forget] {payload.get('message')}"
         return str(payload.get("message", "Command completed."))
+
+    @staticmethod
+    def _format_review_question(question: dict[str, Any]) -> str:
+        return (
+            f"[review {question.get('position', 1)}] "
+            f"{question.get('prompt')} ({question.get('kind')})"
+        )
+
+    @staticmethod
+    def _format_review_result(result: dict[str, Any]) -> str:
+        verdict = "Correct" if result.get("correct") else "Incorrect"
+        accepted = " / ".join(str(value) for value in result.get("accepted_answers") or [])
+        lines = [
+            f"[review] {verdict}. Accepted: {accepted}",
+            f"[review] Next review: {result.get('next_review_at')}",
+        ]
+        next_question = result.get("next_question")
+        if isinstance(next_question, dict):
+            lines.append(CompanionTerminal._format_review_question(next_question))
+        else:
+            lines.append("[review] Complete.")
+        return "\n".join(lines)
 
     @staticmethod
     def _format_memory(memory: dict[str, Any]) -> str:

@@ -1,4 +1,4 @@
-# Mac M0–M2 共用架構
+# Mac M0–M3 共用架構
 
 ## 技術棧
 
@@ -25,13 +25,14 @@ FastAPI Companion Core
     ├── Availability / Command policy
     ├── Conversation Service
     ├── Memory Service / Context Builder
+    ├── Learning Service / Context Builder
     ├── LLM Provider
     └── SQLite repositories
 ```
 
 - UI 只透過 HTTP 呼叫 Core，不直接存取資料庫或 LLM。
 - command 名稱、availability、記憶來源驗證、刪除確認與 recall limit 都由
-  deterministic code 控制。
+  learning grading、review scheduling 與 recall limit 都由 deterministic code 控制。
 - 外部 LLM 位於 provider interface 後方。
 - 自動測試使用 fake provider；Groq 只允許在明確 opt-in 的 live tests 中使用。
 - provider error 是受控錯誤，不得冒充 assistant message。
@@ -54,6 +55,7 @@ teacher/
 │   ├── commands/
 │   ├── conversation/
 │   ├── memory/
+│   ├── learning/
 │   ├── providers/
 │   ├── persistence/
 │   ├── schemas/
@@ -67,7 +69,7 @@ teacher/
 └── data/
 ```
 
-`learning/` 與 `proactive/` 目前沒有已完成行為；其存在不代表 M3／M4 已實作。
+`learning/` 是已完成的 M3；`proactive/` 仍沒有已完成行為，其存在不代表 M4 已實作。
 
 ## 安全與品質規則
 

@@ -60,6 +60,15 @@ class Settings(BaseSettings):
             "COMPANION_MEMORY_CONTEXT_LIMIT",
         ),
     )
+    learning_context_limit: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        validation_alias=AliasChoices(
+            "LEARNING_CONTEXT_LIMIT",
+            "COMPANION_LEARNING_CONTEXT_LIMIT",
+        ),
+    )
 
     @property
     def sqlite_path(self) -> Path | None:

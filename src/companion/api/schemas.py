@@ -1,5 +1,10 @@
 from pydantic import BaseModel, Field
 
+from companion.learning.schemas import (
+    LearningItemSchema,
+    ReviewQuestion,
+    ReviewResult,
+)
 from companion.memory.schemas import MemoryExtractionResult, MemorySchema
 from companion.schemas.availability import AvailabilitySnapshot
 from companion.schemas.conversation import ConversationSchema, MessageSchema
@@ -27,6 +32,9 @@ class CommandResponse(BaseModel):
     memories: list[MemorySchema] = Field(default_factory=list)
     confirmation_required: bool = False
     retryable: bool = False
+    learning_item: LearningItemSchema | None = None
+    review_question: ReviewQuestion | None = None
+    review_complete: bool = False
 
 
 class CreateConversationResponse(BaseModel):
@@ -54,3 +62,12 @@ class ConversationResponse(BaseModel):
 
 class MemoryListResponse(BaseModel):
     memories: list[MemorySchema]
+
+
+class ReviewStateResponse(BaseModel):
+    question: ReviewQuestion | None = None
+    complete: bool
+
+
+class ReviewSubmissionResponse(BaseModel):
+    result: ReviewResult

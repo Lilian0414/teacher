@@ -1,6 +1,6 @@
 # AI Learning Companion
 
-Mac-only M2 implementation for the AI English learning companion.
+Mac-only M3 implementation for the AI English learning companion.
 
 ## Implemented
 
@@ -24,6 +24,14 @@ Mac-only M2 implementation for the AI English learning companion.
   source, trivial-content, and exact-duplicate checks before storage.
 - Relevant-memory recall adds at most five matching memories to normal chat context.
 - Memory management commands: `/remember`, `/memories`, and confirmed `/forget`.
+- `/help` and `/hint` create deduplicated learning items; `/say` never does.
+- `/review` starts a resumable, one-question-at-a-time terminal review session.
+- Review grading is local exact matching after case, whitespace and terminal-punctuation
+  normalization; it never calls Groq.
+- Correct review intervals are 1, 3, 7, 14 and then 30 days; an incorrect answer resets the
+  item to stage zero and schedules it one day later.
+- Up to three due learning goals can join, but remain separately labelled from, relevant life
+  memory in normal conversation context.
 - LLM provider interface with `FakeLLMProvider` for tests and `GroqLLMProvider` for live use.
 - Minimal Textual UI showing messages, Core status, availability and remaining time.
 - pytest, pytest-asyncio, Ruff and mypy configuration.
@@ -43,12 +51,25 @@ Deleted memories remain in SQLite with `status=deleted` but are excluded from re
 listing. Chat recall searches by names and text overlap and sends at most five relevant entries
 to the configured LLM; it never sends the complete memory database.
 
-## Not Implemented In M2
+## Learning Review
+
+```text
+/review       Show the first due prompt and enter review mode
+<your answer> Grade the active prompt, show feedback, then advance
+/review quit  Leave review mode without changing the unanswered item
+```
+
+While reviewing, other slash commands still work and do not discard the active question. A
+restart needs no persisted cursor: answered items retain their schedule, while an unanswered item
+remains due. Learning prompts, accepted answers and attempt history live only in the learning
+tables and are never inserted into long-term life memory.
+
+## Not Implemented In M3
 
 Private conversations, memory sensitivity levels, candidate approval, audit history, conflict
-states, memory editing, proactive-use permissions, learning review, scheduling, proactive
-invitations, voice, hardware, webcam, and file tools are future work. LangChain, Mem0, and Letta
-are intentionally outside the current architecture.
+states, memory editing, proactive-use permissions, proactive invitations and background reminders,
+voice, hardware, webcam, and file tools are future work. LangChain, Mem0, and Letta are
+intentionally outside the current architecture.
 
 ## Setup
 
@@ -67,6 +88,7 @@ GROQ_MODEL=llama-3.1-8b-instant
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_TIMEOUT_SECONDS=30
 MEMORY_CONTEXT_LIMIT=5
+LEARNING_CONTEXT_LIMIT=3
 ```
 
 Keep real `GROQ_API_KEY` values in `.env` or the shell environment only.
