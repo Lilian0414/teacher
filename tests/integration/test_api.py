@@ -4,11 +4,17 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from companion.api.dependencies import get_availability_service
+from companion.api.dependencies import (
+    get_availability_service,
+    get_learning_service,
+    get_llm_provider,
+)
 from companion.availability import AvailabilityService
+from companion.learning import LearningRepository, LearningService
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
+from companion.providers.fake import FakeLLMProvider
 
 
 def test_health_and_state_endpoints() -> None:
@@ -24,8 +30,14 @@ def test_health_and_state_endpoints() -> None:
             user_id="default",
         )
 
+    def override_learning() -> Generator[LearningService, None, None]:
+        yield LearningService(
+            repository=LearningRepository(session), clock=lambda: now, user_id="default"
+        )
+
     app = create_app()
     app.dependency_overrides[get_availability_service] = override_service
+    app.dependency_overrides[get_learning_service] = override_learning
 
     with TestClient(app) as client:
         assert client.get("/health").json()["status"] == "ok"
@@ -34,6 +46,7 @@ def test_health_and_state_endpoints() -> None:
     assert payload["availability"] == "available"
     assert payload["override_expires_at"] is None
     assert payload["timezone"] == "Asia/Taipei"
+    assert payload["due_review_count"] == 0
 
 
 def test_unknown_command_response_is_deterministic() -> None:
@@ -60,6 +73,43 @@ def test_unknown_command_response_is_deterministic() -> None:
     assert "/busy <duration>" in payload["message"]
 
 
+def test_due_review_count_reflects_pending_items() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = Session(engine)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+
+    def override_availability() -> Generator[AvailabilityService, None, None]:
+        yield AvailabilityService(
+            repository=AvailabilityRepository(session),
+            clock=lambda: now,
+            user_id="default",
+        )
+
+    learning_service = LearningService(
+        repository=LearningRepository(session), clock=lambda: now, user_id="default"
+    )
+
+    def override_learning() -> Generator[LearningService, None, None]:
+        yield learning_service
+
+    app = create_app()
+    app.dependency_overrides[get_availability_service] = override_availability
+    app.dependency_overrides[get_learning_service] = override_learning
+    app.dependency_overrides[get_llm_provider] = lambda: FakeLLMProvider()
+
+    with TestClient(app) as client:
+        before = client.get("/v1/state").json()
+        client.post(
+            "/v1/commands/execute",
+            json={"raw": "/hint 我不會說出軌"},
+        )
+        after = client.get("/v1/state").json()
+
+    assert before["due_review_count"] == 0
+    assert after["due_review_count"] == 1
+
+
 def test_command_api_changes_availability() -> None:
     engine = make_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -73,8 +123,14 @@ def test_command_api_changes_availability() -> None:
             user_id="default",
         )
 
+    def override_learning() -> Generator[LearningService, None, None]:
+        yield LearningService(
+            repository=LearningRepository(session), clock=lambda: now, user_id="default"
+        )
+
     app = create_app()
     app.dependency_overrides[get_availability_service] = override_service
+    app.dependency_overrides[get_learning_service] = override_learning
 
     with TestClient(app) as client:
         busy = client.post("/v1/commands/execute", json={"raw": "/busy 1h30m"}).json()

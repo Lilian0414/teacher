@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -82,6 +82,17 @@ class LearningRepository:
                 )
                 .limit(limit)
             )
+        )
+
+    def due_count(self, *, user_id: str, now: datetime) -> int:
+        return (
+            self._session.scalar(
+                select(func.count(LearningItem.id)).where(
+                    LearningItem.user_id == user_id,
+                    LearningItem.next_review_at <= encode_dt(now),
+                )
+            )
+            or 0
         )
 
     def record_attempt(

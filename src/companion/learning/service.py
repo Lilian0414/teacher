@@ -56,6 +56,9 @@ class LearningService:
         items = self._repository.due_items(user_id=self._user_id, now=self._clock(), limit=1)
         return self._question(items[0]) if items else None
 
+    def due_count(self) -> int:
+        return self._repository.due_count(user_id=self._user_id, now=self._clock())
+
     def answer(self, *, item_id: str, answer: str) -> ReviewResult:
         now = self._clock()
         item = self._repository.get_item(item_id, user_id=self._user_id)
