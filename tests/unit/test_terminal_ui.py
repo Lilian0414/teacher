@@ -352,6 +352,7 @@ async def test_help_intent_reuses_existing_help_behavior_and_offers_actions() ->
     assert '"raw":"/help 我今天翹課了"' in requests[0]
     assert terminal._mode == InteractionMode.HELP_RESULT
     assert terminal._pending_help_content == "我今天翹課了"
+    assert terminal._pending_help_expression == "I skipped class today."
     assert any("Natural expression" in value for value in sink.values)
     assert any("Actions:" in value for value in sink.values)
     assert any("Use this" in value for value in sink.values)
@@ -383,20 +384,36 @@ async def test_hint_intent_creates_learning_item_and_does_not_offer_actions() ->
 
 
 @pytest.mark.asyncio
-async def test_use_this_routes_through_say_and_does_not_create_learning_item() -> None:
-    say_requests: list[str] = []
+async def test_use_this_sends_the_exact_displayed_expression_without_retranslating() -> None:
+    requests: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1/commands/execute":
-            raw = request.content.decode()
-            say_requests.append(raw)
+        requests.append((request.url.path, request.content.decode()))
+        if request.url.path == "/v1/conversations/conv-1/messages":
             return httpx.Response(
                 200,
                 json={
-                    "command": "say",
                     "ok": True,
-                    "inserted_text": "I skipped class today.",
-                    "assistant_message": {"content": "That happens sometimes."},
+                    "user_message": {
+                        "id": "user-1",
+                        "conversation_id": "conv-1",
+                        "role": "user",
+                        "content": "I skipped class today.",
+                        "language": "en",
+                        "source": "terminal",
+                        "created_at": "2026-08-19T00:00:00+00:00",
+                    },
+                    "assistant_message": {
+                        "id": "assistant-1",
+                        "conversation_id": "conv-1",
+                        "role": "assistant",
+                        "content": "That happens sometimes.",
+                        "language": "en",
+                        "source": "terminal",
+                        "created_at": "2026-08-19T00:00:01+00:00",
+                    },
+                    "error": None,
+                    "retryable": False,
                 },
             )
         raise AssertionError(f"unexpected path {request.url.path}")
@@ -407,17 +424,24 @@ async def test_use_this_routes_through_say_and_does_not_create_learning_item() -
         base_url="http://test", transport=httpx.MockTransport(handler)
     )
     sink = cast(MessageSink, terminal._messages)
+    terminal._conversation_id = "conv-1"
     terminal._mode = InteractionMode.HELP_RESULT
     terminal._pending_help_content = "我今天翹課了"
+    terminal._pending_help_expression = "I skipped class today."
 
     await terminal.action_use_suggestion()
 
-    assert len(say_requests) == 1
-    assert "/say" in say_requests[0]
+    assert requests == [
+        (
+            "/v1/conversations/conv-1/messages",
+            '{"content":"I skipped class today."}',
+        )
+    ]
     assert terminal._mode == InteractionMode.NORMAL
     assert terminal._pending_help_content is None
+    assert terminal._pending_help_expression is None
     assert any("You said: I skipped class today." in value for value in sink.values)
-    assert not any("[say] inserted" in value for value in sink.values)
+    assert any("assistant: That happens sometimes." in value for value in sink.values)
 
 
 @pytest.mark.asyncio
@@ -454,6 +478,7 @@ def test_try_myself_returns_to_normal_input_without_sending() -> None:
 
     assert terminal._mode == InteractionMode.NORMAL
     assert terminal._pending_help_content is None
+    assert terminal._pending_help_expression is None
     assert terminal._input.placeholder == "Say something..."
     assert any("try it yourself" in value for value in sink.values)
 
@@ -489,4 +514,5 @@ def test_check_action_only_shows_use_suggestion_in_help_result() -> None:
     assert terminal.check_action("use_suggestion", ()) is False
 
     terminal._mode = InteractionMode.HELP_RESULT
+    terminal._pending_help_expression = "I skipped class today."
     assert terminal.check_action("use_suggestion", ()) is True

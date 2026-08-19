@@ -88,6 +88,7 @@ class CompanionTerminal(App[None]):
         self._waiting = False
         self._mode = InteractionMode.NORMAL
         self._pending_help_content: str | None = None
+        self._pending_help_expression: str | None = None
         self._due_review_count = 0
 
     def compose(self) -> ComposeResult:
@@ -116,7 +117,10 @@ class CompanionTerminal(App[None]):
         if action in {"help_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
         if action == "use_suggestion":
-            return self._mode == InteractionMode.HELP_RESULT
+            return (
+                self._mode == InteractionMode.HELP_RESULT
+                and self._pending_help_expression is not None
+            )
         if action == "cancel_intent":
             return self._mode != InteractionMode.NORMAL
         return True
@@ -147,7 +151,7 @@ class CompanionTerminal(App[None]):
         if (
             self._waiting
             or self._mode != InteractionMode.HELP_RESULT
-            or self._pending_help_content is None
+            or self._pending_help_expression is None
         ):
             return
         await self._run_guarded(self._run_use_suggestion)
@@ -174,9 +178,9 @@ class CompanionTerminal(App[None]):
         await self._send_command("/review")
 
     async def _run_use_suggestion(self) -> None:
-        content = self._pending_help_content
-        assert content is not None
-        await self._send_command(f"/say {content}")
+        expression = self._pending_help_expression
+        assert expression is not None
+        await self._send_chat_message(expression, echo_user=True)
         self._reset_to_normal()
 
     async def _run_hint_only(self) -> None:
@@ -189,9 +193,17 @@ class CompanionTerminal(App[None]):
 
     async def _run_help_capture(self, raw: str) -> None:
         self._pending_help_content = raw
+        self._pending_help_expression = None
         result = await self._post_command(f"/help {raw}")
         self._messages.write(self._format_command_result(result))
-        if result.get("ok") and result.get("command") == "help":
+        suggestion = result.get("natural_expression") or result.get("correction")
+        if (
+            result.get("ok")
+            and result.get("command") == "help"
+            and isinstance(suggestion, str)
+            and suggestion.strip()
+        ):
+            self._pending_help_expression = suggestion.strip()
             self._mode = InteractionMode.HELP_RESULT
             self._after_mode_change()
             self._messages.write("Actions:\n- Use this\n- Hint only\n- Try myself")
@@ -206,6 +218,7 @@ class CompanionTerminal(App[None]):
     def _begin_capture(self, mode: InteractionMode) -> None:
         self._mode = mode
         self._pending_help_content = None
+        self._pending_help_expression = None
         self._input.placeholder = "What do you want to say?"
         self._messages.write("What do you want to say?")
         self._after_mode_change()
@@ -214,6 +227,7 @@ class CompanionTerminal(App[None]):
     def _reset_to_normal(self) -> None:
         self._mode = InteractionMode.NORMAL
         self._pending_help_content = None
+        self._pending_help_expression = None
         self._input.placeholder = "Say something..."
         self._after_mode_change()
         self._focus_input()
@@ -355,7 +369,7 @@ class CompanionTerminal(App[None]):
             str(next_question["id"]) if isinstance(next_question, dict) else None
         )
 
-    async def _send_chat_message(self, raw: str) -> None:
+    async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
         await self.ensure_conversation()
         if self._conversation_id is None:
             self._messages.write("[system] No active conversation.")
@@ -369,6 +383,8 @@ class CompanionTerminal(App[None]):
         if not result.get("ok"):
             self._messages.write(f"[system] {result.get('error', 'Message failed.')}")
             return
+        if echo_user:
+            self._messages.write(f"You said: {raw}")
         assistant = result.get("assistant_message")
         if assistant is not None:
             self._messages.write(f"assistant: {assistant['content']}")
