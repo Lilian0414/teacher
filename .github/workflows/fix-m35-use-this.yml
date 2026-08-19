@@ -1,0 +1,116 @@
+name: Fix M3.5 Use this
+
+on:
+  push:
+    branches:
+      - feat/m3.5-simplify-learning-ui
+    paths:
+      - .github/workflows/fix-m35-use-this.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/m3.5-simplify-learning-ui
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply exact-suggestion fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app = Path('terminal_ui/app.py')
+          s = app.read_text()
+          replacements = [
+              (
+                  '        self._pending_help_content: str | None = None\n        self._due_review_count = 0\n',
+                  '        self._pending_help_content: str | None = None\n        self._pending_help_expression: str | None = None\n        self._due_review_count = 0\n',
+              ),
+              (
+                  '        if action == "use_suggestion":\n            return self._mode == InteractionMode.HELP_RESULT\n',
+                  '        if action == "use_suggestion":\n            return (\n                self._mode == InteractionMode.HELP_RESULT\n                and self._pending_help_expression is not None\n            )\n',
+              ),
+              (
+                  '            or self._pending_help_content is None\n        ):\n            return\n        await self._run_guarded(self._run_use_suggestion)\n',
+                  '            or self._pending_help_expression is None\n        ):\n            return\n        await self._run_guarded(self._run_use_suggestion)\n',
+              ),
+              (
+                  '    async def _run_use_suggestion(self) -> None:\n        content = self._pending_help_content\n        assert content is not None\n        await self._send_command(f"/say {content}")\n        self._reset_to_normal()\n',
+                  '    async def _run_use_suggestion(self) -> None:\n        expression = self._pending_help_expression\n        assert expression is not None\n        await self._send_chat_message(expression, echo_user=True)\n        self._reset_to_normal()\n',
+              ),
+              (
+                  '    async def _run_help_capture(self, raw: str) -> None:\n        self._pending_help_content = raw\n        result = await self._post_command(f"/help {raw}")\n        self._messages.write(self._format_command_result(result))\n        if result.get("ok") and result.get("command") == "help":\n            self._mode = InteractionMode.HELP_RESULT\n            self._after_mode_change()\n            self._messages.write("Actions:\\n- Use this\\n- Hint only\\n- Try myself")\n        else:\n            self._reset_to_normal()\n',
+                  '    async def _run_help_capture(self, raw: str) -> None:\n        self._pending_help_content = raw\n        self._pending_help_expression = None\n        result = await self._post_command(f"/help {raw}")\n        self._messages.write(self._format_command_result(result))\n        suggestion = result.get("natural_expression") or result.get("correction")\n        if (\n            result.get("ok")\n            and result.get("command") == "help"\n            and isinstance(suggestion, str)\n            and suggestion.strip()\n        ):\n            self._pending_help_expression = suggestion.strip()\n            self._mode = InteractionMode.HELP_RESULT\n            self._after_mode_change()\n            self._messages.write("Actions:\\n- Use this\\n- Hint only\\n- Try myself")\n        else:\n            self._reset_to_normal()\n',
+              ),
+              (
+                  '    def _begin_capture(self, mode: InteractionMode) -> None:\n        self._mode = mode\n        self._pending_help_content = None\n',
+                  '    def _begin_capture(self, mode: InteractionMode) -> None:\n        self._mode = mode\n        self._pending_help_content = None\n        self._pending_help_expression = None\n',
+              ),
+              (
+                  '    def _reset_to_normal(self) -> None:\n        self._mode = InteractionMode.NORMAL\n        self._pending_help_content = None\n',
+                  '    def _reset_to_normal(self) -> None:\n        self._mode = InteractionMode.NORMAL\n        self._pending_help_content = None\n        self._pending_help_expression = None\n',
+              ),
+              (
+                  '    async def _send_chat_message(self, raw: str) -> None:\n',
+                  '    async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:\n',
+              ),
+              (
+                  '        if not result.get("ok"):\n            self._messages.write(f"[system] {result.get(\'error\', \'Message failed.\')}")\n            return\n        assistant = result.get("assistant_message")\n',
+                  '        if not result.get("ok"):\n            self._messages.write(f"[system] {result.get(\'error\', \'Message failed.\')}")\n            return\n        if echo_user:\n            self._messages.write(f"You said: {raw}")\n        assistant = result.get("assistant_message")\n',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit(f'Expected app.py block not found: {old[:80]!r}')
+              s = s.replace(old, new, 1)
+          app.write_text(s)
+
+          tests = Path('tests/unit/test_terminal_ui.py')
+          t = tests.read_text()
+          t = t.replace(
+              '    assert terminal._pending_help_content == "我今天翹課了"\n',
+              '    assert terminal._pending_help_content == "我今天翹課了"\n    assert terminal._pending_help_expression == "I skipped class today."\n',
+              1,
+          )
+          old_test = '''@pytest.mark.asyncio\nasync def test_use_this_routes_through_say_and_does_not_create_learning_item() -> None:\n    say_requests: list[str] = []\n\n    def handler(request: httpx.Request) -> httpx.Response:\n        if request.url.path == "/v1/commands/execute":\n            raw = request.content.decode()\n            say_requests.append(raw)\n            return httpx.Response(\n                200,\n                json={\n                    "command": "say",\n                    "ok": True,\n                    "inserted_text": "I skipped class today.",\n                    "assistant_message": {"content": "That happens sometimes."},\n                },\n            )\n        raise AssertionError(f"unexpected path {request.url.path}")\n\n    terminal = make_terminal()\n    await terminal._client.aclose()\n    terminal._client = httpx.AsyncClient(\n        base_url="http://test", transport=httpx.MockTransport(handler)\n    )\n    sink = cast(MessageSink, terminal._messages)\n    terminal._mode = InteractionMode.HELP_RESULT\n    terminal._pending_help_content = "我今天翹課了"\n\n    await terminal.action_use_suggestion()\n\n    assert len(say_requests) == 1\n    assert "/say" in say_requests[0]\n    assert terminal._mode == InteractionMode.NORMAL\n    assert terminal._pending_help_content is None\n    assert any("You said: I skipped class today." in value for value in sink.values)\n    assert not any("[say] inserted" in value for value in sink.values)\n'''
+          new_test = '''@pytest.mark.asyncio\nasync def test_use_this_sends_the_exact_displayed_expression_without_retranslating() -> None:\n    requests: list[tuple[str, str]] = []\n\n    def handler(request: httpx.Request) -> httpx.Response:\n        requests.append((request.url.path, request.content.decode()))\n        if request.url.path == "/v1/conversations/conv-1/messages":\n            return httpx.Response(\n                200,\n                json={\n                    "ok": True,\n                    "user_message": {\n                        "id": "user-1",\n                        "conversation_id": "conv-1",\n                        "role": "user",\n                        "content": "I skipped class today.",\n                        "language": "en",\n                        "source": "terminal",\n                        "created_at": "2026-08-19T00:00:00+00:00",\n                    },\n                    "assistant_message": {\n                        "id": "assistant-1",\n                        "conversation_id": "conv-1",\n                        "role": "assistant",\n                        "content": "That happens sometimes.",\n                        "language": "en",\n                        "source": "terminal",\n                        "created_at": "2026-08-19T00:00:01+00:00",\n                    },\n                    "error": None,\n                    "retryable": False,\n                },\n            )\n        raise AssertionError(f"unexpected path {request.url.path}")\n\n    terminal = make_terminal()\n    await terminal._client.aclose()\n    terminal._client = httpx.AsyncClient(\n        base_url="http://test", transport=httpx.MockTransport(handler)\n    )\n    sink = cast(MessageSink, terminal._messages)\n    terminal._conversation_id = "conv-1"\n    terminal._mode = InteractionMode.HELP_RESULT\n    terminal._pending_help_content = "我今天翹課了"\n    terminal._pending_help_expression = "I skipped class today."\n\n    await terminal.action_use_suggestion()\n\n    assert requests == [\n        (\n            "/v1/conversations/conv-1/messages",\n            '{"content":"I skipped class today."}',\n        )\n    ]\n    assert terminal._mode == InteractionMode.NORMAL\n    assert terminal._pending_help_content is None\n    assert terminal._pending_help_expression is None\n    assert any("You said: I skipped class today." in value for value in sink.values)\n    assert any("assistant: That happens sometimes." in value for value in sink.values)\n'''
+          if old_test not in t:
+              raise SystemExit('Expected Use this test block not found')
+          t = t.replace(old_test, new_test, 1)
+          t = t.replace(
+              '    assert terminal._pending_help_content is None\n    assert terminal._input.placeholder == "Say something..."\n',
+              '    assert terminal._pending_help_content is None\n    assert terminal._pending_help_expression is None\n    assert terminal._input.placeholder == "Say something..."\n',
+              1,
+          )
+          t = t.replace(
+              '    terminal._mode = InteractionMode.HELP_RESULT\n    assert terminal.check_action("use_suggestion", ()) is True\n',
+              '    terminal._mode = InteractionMode.HELP_RESULT\n    terminal._pending_help_expression = "I skipped class today."\n    assert terminal.check_action("use_suggestion", ()) is True\n',
+              1,
+          )
+          tests.write_text(t)
+          PY
+
+      - name: Install project and validate
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          ruff check .
+          mypy .
+          pytest
+
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/fix-m35-use-this.yml
+          git add terminal_ui/app.py tests/unit/test_terminal_ui.py
+          git commit -m 'fix: send exact help suggestion from Use this'
+          git push origin HEAD:feat/m3.5-simplify-learning-ui
