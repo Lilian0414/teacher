@@ -64,6 +64,7 @@ async def health() -> dict[str, str | int]:
 @router.get("/v1/state")
 async def state(
     availability: AvailabilityService = AvailabilityDependency,
+    learning_service: LearningService = LearningDependency,
 ) -> StateResponse:
     settings = get_settings()
     snapshot = availability.snapshot()
@@ -75,6 +76,7 @@ async def state(
         timezone=settings.timezone,
         remaining_seconds=snapshot.remaining_seconds,
         llm=get_llm_status(),
+        due_review_count=learning_service.due_count(),
     )
 
 

@@ -32,3 +32,4 @@ class StateResponse(BaseModel):
     timezone: str
     remaining_seconds: int | None
     llm: LLMStatus
+    due_review_count: int = 0
