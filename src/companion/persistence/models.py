@@ -111,3 +111,22 @@ class LearningAttempt(Base):
     stage_before: Mapped[int] = mapped_column(Integer)
     stage_after: Mapped[int] = mapped_column(Integer)
     attempted_at: Mapped[str] = mapped_column(String(40))
+
+
+class ProactiveInvitation(Base):
+    __tablename__ = "proactive_invitations"
+    __table_args__ = (
+        Index("ix_proactive_pending", "user_id", "status"),
+        Index("ix_proactive_daily", "user_id", "local_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    responded_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    suppress_until: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    local_date: Mapped[str] = mapped_column(String(10))
+    starter_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    starter_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -33,7 +33,8 @@ Mac-only M3 implementation for the AI English learning companion.
 - Up to three due learning goals can join, but remain separately labelled from, relevant life
   memory in normal conversation context.
 - LLM provider interface with `FakeLLMProvider` for tests and `GroqLLMProvider` for live use.
-- Minimal Textual UI showing messages, Core status, availability and remaining time.
+- Textual UI showing messages, Core status, availability, reviews, and in-app proactive practice
+  invitations while the UI is running (see `doc/M4_PROACTIVE.md`).
 - pytest, pytest-asyncio, Ruff and mypy configuration.
 
 ## Memory Commands

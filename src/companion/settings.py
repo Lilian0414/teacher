@@ -69,6 +69,12 @@ class Settings(BaseSettings):
             "COMPANION_LEARNING_CONTEXT_LIMIT",
         ),
     )
+    proactive_poll_interval_seconds: int = Field(default=30, ge=5)
+    proactive_review_idle_seconds: int = Field(default=600, ge=0)
+    proactive_conversation_idle_seconds: int = Field(default=1800, ge=0)
+    proactive_snooze_minutes: int = Field(default=30, ge=1)
+    proactive_accept_cooldown_minutes: int = Field(default=60, ge=1)
+    proactive_daily_limit: int = Field(default=3, ge=1, le=20)
 
     @property
     def sqlite_path(self) -> Path | None:
