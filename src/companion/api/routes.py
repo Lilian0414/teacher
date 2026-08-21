@@ -27,6 +27,15 @@ from companion.memory import (
     MemoryService,
     MemoryValidationError,
 )
+from companion.proactive import (
+    InvitationConflictError,
+    InvitationNotFoundError,
+    ProactiveCheckRequest,
+    ProactiveCheckResponse,
+    ProactiveRespondRequest,
+    ProactiveRespondResponse,
+    ProactiveService,
+)
 from companion.providers.errors import LLMConfigurationError, LLMProviderError
 from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest
@@ -40,6 +49,7 @@ from .dependencies import (
     get_llm_provider,
     get_llm_status,
     get_memory_service,
+    get_proactive_service,
 )
 
 router = APIRouter()
@@ -48,6 +58,29 @@ ConversationDependency = Depends(get_conversation_service)
 LLMDependency = Depends(get_llm_provider)
 MemoryDependency = Depends(get_memory_service)
 LearningDependency = Depends(get_learning_service)
+ProactiveDependency = Depends(get_proactive_service)
+
+
+@router.post("/v1/proactive/check")
+async def check_proactive(
+    request: ProactiveCheckRequest,
+    service: ProactiveService = ProactiveDependency,
+) -> ProactiveCheckResponse:
+    return ProactiveCheckResponse(invitation=service.check(request))
+
+
+@router.post("/v1/proactive/invitations/{invitation_id}/respond")
+async def respond_proactive(
+    invitation_id: str,
+    request: ProactiveRespondRequest,
+    service: ProactiveService = ProactiveDependency,
+) -> ProactiveRespondResponse:
+    try:
+        return service.respond(invitation_id, request.decision)
+    except InvitationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Invitation not found") from exc
+    except InvitationConflictError as exc:
+        raise HTTPException(status_code=409, detail="Invitation is no longer pending") from exc
 
 
 @router.get("/health")
