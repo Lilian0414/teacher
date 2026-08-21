@@ -1,0 +1,108 @@
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+from companion.availability import AvailabilityService
+from companion.clock import Clock, system_clock
+from companion.learning import LearningService
+from companion.persistence.models import ProactiveInvitation
+from companion.persistence.repositories import decode_dt
+from companion.proactive.errors import InvitationConflictError, InvitationNotFoundError
+from companion.proactive.repository import ProactiveRepository
+from companion.proactive.schemas import (
+    InvitationDecision,
+    InvitationKind,
+    InvitationSchema,
+    InvitationStatus,
+    ProactiveCheckRequest,
+    ProactiveRespondResponse,
+)
+from companion.schemas.availability import AvailabilityState
+from companion.settings import Settings
+
+STARTERS = (
+    ("week-highlight", "What was one highlight of your week, and why did it matter to you?"),
+    ("recent-learning", "Tell me about something interesting you learned recently."),
+    ("ideal-weekend", "What would your ideal weekend look like?"),
+    ("small-goal", "What is one small goal you would like to achieve this week?"),
+)
+
+
+class ProactiveService:
+    def __init__(self, *, repository: ProactiveRepository,
+                 availability: AvailabilityService, learning: LearningService,
+                 settings: Settings, clock: Clock = system_clock) -> None:
+        self._repository = repository
+        self._availability = availability
+        self._learning = learning
+        self._settings = settings
+        self._clock = clock
+
+    def check(self, request: ProactiveCheckRequest) -> InvitationSchema | None:
+        now = self._now()
+        if (
+            not request.can_present
+            or self._availability.snapshot().state != AvailabilityState.AVAILABLE
+        ):
+            return None
+        pending = self._repository.pending(self._settings.user_id)
+        if pending is not None:
+            return self._schema(pending)
+        today = now.date()
+        latest = self._repository.latest(self._settings.user_id)
+        if latest and latest.suppress_until and decode_dt(latest.suppress_until) > now:
+            return None
+        if (
+            self._repository.delivery_count(self._settings.user_id, today)
+            >= self._settings.proactive_daily_limit
+        ):
+            return None
+        due = self._learning.due_count() > 0
+        kind = InvitationKind.REVIEW if due else InvitationKind.CONVERSATION
+        threshold = (self._settings.proactive_review_idle_seconds if due
+                     else self._settings.proactive_conversation_idle_seconds)
+        if request.idle_seconds < threshold:
+            return None
+        key = prompt = None
+        if kind == InvitationKind.CONVERSATION:
+            count = self._repository.delivery_count(self._settings.user_id, today, kind)
+            index = count % len(STARTERS)
+            key, prompt = STARTERS[index]
+        return self._schema(self._repository.create(user_id=self._settings.user_id, kind=kind,
+            now=now, local_date=today, starter_key=key, starter_prompt=prompt))
+
+    def respond(self, invitation_id: str, decision: InvitationDecision) -> ProactiveRespondResponse:
+        row = self._repository.get(invitation_id, self._settings.user_id)
+        if row is None:
+            raise InvitationNotFoundError(invitation_id)
+        if row.status != InvitationStatus.PENDING.value:
+            raise InvitationConflictError(invitation_id)
+        now = self._now()
+        status = InvitationStatus.ACCEPTED
+        boundary = now + timedelta(minutes=self._settings.proactive_accept_cooldown_minutes)
+        if decision == InvitationDecision.SNOOZE:
+            status = InvitationStatus.SNOOZED
+            boundary = now + timedelta(minutes=self._settings.proactive_snooze_minutes)
+        elif decision == InvitationDecision.DISMISS_TODAY:
+            status = InvitationStatus.DISMISSED
+            boundary = datetime.combine(now.date() + timedelta(days=1), time(), tzinfo=now.tzinfo)
+        if not self._repository.resolve(row, status=status, now=now, suppress_until=boundary):
+            raise InvitationConflictError(invitation_id)
+        schema = self._schema(row)
+        if decision != InvitationDecision.START:
+            return ProactiveRespondResponse(invitation=schema)
+        if row.kind == InvitationKind.REVIEW.value:
+            question = self._learning.first_due()
+            return ProactiveRespondResponse(invitation=schema, review_question=question,
+                                              review_complete=question is None)
+        return ProactiveRespondResponse(invitation=schema, conversation_starter=row.starter_prompt)
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        return value.astimezone(ZoneInfo(self._settings.timezone))
+
+    @staticmethod
+    def _schema(row: ProactiveInvitation) -> InvitationSchema:
+        return InvitationSchema(id=row.id, kind=InvitationKind(row.kind),
+            status=InvitationStatus(row.status), created_at=decode_dt(row.created_at),
+            suppress_until=decode_dt(row.suppress_until) if row.suppress_until else None,
+            starter_key=row.starter_key, starter_prompt=row.starter_prompt)

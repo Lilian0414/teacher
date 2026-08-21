@@ -20,6 +20,39 @@ def make_terminal() -> CompanionTerminal:
     return terminal
 
 
+@pytest.mark.asyncio
+async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_answers() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/v1/proactive/check":
+            return httpx.Response(200, json={"invitation": {
+                "id": "invite-1", "kind": "conversation", "status": "pending",
+                "created_at": "2026-08-21T12:00:00+00:00",
+                "starter_prompt": "What made you smile today?",
+            }})
+        if request.url.path.endswith("/respond"):
+            return httpx.Response(200, json={
+                "invitation": {"id": "invite-1", "kind": "conversation",
+                               "status": "accepted", "created_at": "2026-08-21T12:00:00+00:00"},
+                "conversation_starter": "What made you smile today?",
+            })
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    await terminal.check_proactive_invitation()
+    assert terminal._pending_invitation is not None
+    await terminal._respond_to_invitation("start")
+    assert terminal._mode == InteractionMode.PRACTICE_PROMPT
+    assert requests == ["/v1/proactive/check", "/v1/proactive/invitations/invite-1/respond"]
+    await terminal._client.aclose()
+
+
 def test_hint_is_rendered_without_debug_prefix() -> None:
     rendered = CompanionTerminal._format_command_result(
         {

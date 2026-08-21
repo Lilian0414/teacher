@@ -19,6 +19,10 @@
 
 ```text
 Textual UI
+
+M4 proactive checks cross the UI/Core boundary only through HTTP. Core owns deterministic
+eligibility and persistence; Textual owns only transient idle/presentability state and rendering.
+No polling or invitation acceptance path calls the LLM.
     │ HTTP
     ▼
 FastAPI Companion Core

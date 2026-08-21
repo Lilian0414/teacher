@@ -8,6 +8,7 @@ from companion.learning import LearningContextBuilder, LearningRepository, Learn
 from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryService
 from companion.persistence.database import get_session
 from companion.persistence.repositories import AvailabilityRepository
+from companion.proactive import ProactiveRepository, ProactiveService
 from companion.providers import FakeLLMProvider, GroqLLMProvider, LLMProvider
 from companion.providers.errors import LLMConfigurationError
 from companion.schemas.availability import LLMStatus
@@ -104,4 +105,18 @@ def get_learning_service() -> Generator[LearningService, None, None]:
         yield LearningService(
             repository=LearningRepository(session),
             user_id=settings.user_id,
+        )
+
+
+def get_proactive_service() -> Generator[ProactiveService, None, None]:
+    for session in get_session():
+        settings = get_settings()
+        yield ProactiveService(
+            repository=ProactiveRepository(session),
+            availability=build_availability_service(session),
+            learning=LearningService(
+                repository=LearningRepository(session),
+                user_id=settings.user_id,
+            ),
+            settings=settings,
         )

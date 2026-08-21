@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Any, cast
@@ -22,6 +23,7 @@ class InteractionMode(StrEnum):
     AWAITING_HELP_SENTENCE = "awaiting_help_sentence"
     AWAITING_HINT_SENTENCE = "awaiting_hint_sentence"
     HELP_RESULT = "help_result"
+    PRACTICE_PROMPT = "practice_prompt"
 
 
 class CompanionTerminal(App[None]):
@@ -47,6 +49,7 @@ class CompanionTerminal(App[None]):
     #command {
         dock: bottom;
     }
+    #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
     """
 
     # Exact key choices are flexible (see M3.5 issue): Ctrl+I is avoided
@@ -82,6 +85,12 @@ class CompanionTerminal(App[None]):
             Button(id="action-2"),
             Button(id="action-3"),
         ]
+        self._invitation = Static("", id="invitation")
+        self._invitation_buttons = [
+            Button("Start", id="invitation-start", variant="success"),
+            Button("Later", id="invitation-later"),
+            Button("Not today", id="invitation-dismiss"),
+        ]
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
         self._active_review_item_id: str | None = None
@@ -90,12 +99,17 @@ class CompanionTerminal(App[None]):
         self._pending_help_content: str | None = None
         self._pending_help_expression: str | None = None
         self._due_review_count = 0
+        self._pending_invitation: dict[str, Any] | None = None
+        self._last_activity = time.monotonic()
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
             yield self._status
             yield self._messages
+            yield self._invitation
+            with Horizontal(id="invitation-actions"):
+                yield from self._invitation_buttons
             with Horizontal(id="actions"):
                 yield from self._action_buttons
             yield self._input
@@ -104,6 +118,8 @@ class CompanionTerminal(App[None]):
     async def on_mount(self) -> None:
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
+        self.set_interval(30, self.check_proactive_invitation)
+        self._hide_invitation()
         state = await self.refresh_state()
         await self.ensure_conversation()
         self._messages.write(self._startup_message(state))
@@ -168,6 +184,12 @@ class CompanionTerminal(App[None]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._waiting:
+            return
+        decisions = {"invitation-start": "start", "invitation-later": "snooze",
+                     "invitation-dismiss": "dismiss_today"}
+        if event.button.id in decisions:
+            decision = decisions[event.button.id or ""]
+            await self._run_guarded(lambda: self._respond_to_invitation(decision))
             return
         action_name = self._button_actions.get(event.button.id or "")
         if action_name is None:
@@ -298,6 +320,7 @@ class CompanionTerminal(App[None]):
             self._messages.write("[system] Waiting for the current response.")
             return
         raw = event.value.strip()
+        self._last_activity = time.monotonic()
         event.input.value = ""
         if not raw:
             return
@@ -314,6 +337,69 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._submit_review_answer(raw))
         else:
             await self._run_guarded(lambda: self._send_chat_message(raw))
+            if self._mode == InteractionMode.PRACTICE_PROMPT:
+                self._reset_to_normal()
+
+    def _can_present_invitation(self) -> bool:
+        return (not self._waiting and self._mode == InteractionMode.NORMAL
+                and self._active_review_item_id is None and self._pending_invitation is None)
+
+    async def check_proactive_invitation(self) -> None:
+        try:
+            response = await self._client.post("/v1/proactive/check", json={
+                "idle_seconds": max(0.0, time.monotonic() - self._last_activity),
+                "can_present": self._can_present_invitation(),
+            })
+            response.raise_for_status()
+            invitation = response.json().get("invitation")
+            if isinstance(invitation, dict) and self._can_present_invitation():
+                self._pending_invitation = invitation
+                kind = invitation.get("kind")
+                text = (
+                    "A review is ready when you are."
+                    if kind == "review"
+                    else str(
+                        invitation.get("starter_prompt") or "Ready for a short conversation?"
+                    )
+                )
+                self._invitation.update(f"Practice invitation\n{text}")
+                self._invitation.display = True
+                for button in self._invitation_buttons:
+                    button.display = True
+        except (httpx.HTTPError, ValueError):
+            # Polling is best-effort and must never disturb an active workflow.
+            return
+
+    async def _respond_to_invitation(self, decision: str) -> None:
+        invitation = self._pending_invitation
+        if invitation is None:
+            return
+        response = await self._client.post(
+            f"/v1/proactive/invitations/{invitation['id']}/respond",
+            json={"decision": decision},
+        )
+        response.raise_for_status()
+        payload = cast(dict[str, Any], response.json())
+        self._hide_invitation()
+        self._last_activity = time.monotonic()
+        if decision != "start":
+            return
+        question = payload.get("review_question")
+        if isinstance(question, dict):
+            self._active_review_item_id = str(question["id"])
+            self._messages.write(self._format_review_question(question))
+        elif payload.get("review_complete"):
+            self._messages.write("No items are due. Review complete.")
+        elif isinstance(payload.get("conversation_starter"), str):
+            self._mode = InteractionMode.PRACTICE_PROMPT
+            self._messages.write(f"Practice prompt: {payload['conversation_starter']}")
+            self._after_mode_change()
+
+    def _hide_invitation(self) -> None:
+        self._pending_invitation = None
+        self._invitation.display = False
+        for button in self._invitation_buttons:
+            button.display = False
 
     async def ensure_conversation(self) -> None:
         if self._conversation_id is not None:

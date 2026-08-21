@@ -8,6 +8,7 @@
 ## 目前完成的 M0–M3
 
 - FastAPI Core、Textual 終端介面、SQLite、SQLAlchemy 2.x 與 Alembic。
+- M4 在 Textual 開啟時提供 Core 管理的複習／對話練習邀請；不支援關閉程式後的通知。
 - `available`、`busy`、`dnd` 狀態及 deterministic slash-command parser。
 - 可保存 user／assistant 訊息的英文文字對話。
 - `/help`、`/hint`、`/say` 三個語言救援指令。
