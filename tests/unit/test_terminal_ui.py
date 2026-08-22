@@ -2,6 +2,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from textual.widgets import Input
 
 from terminal_ui.app import CompanionTerminal, InteractionMode
 
@@ -18,6 +19,10 @@ def make_terminal() -> CompanionTerminal:
     terminal = CompanionTerminal()
     terminal._messages = cast(Any, MessageSink())
     return terminal
+
+
+def assert_mode(terminal: CompanionTerminal, expected: InteractionMode) -> None:
+    assert terminal._mode == expected
 
 
 @pytest.mark.asyncio
@@ -50,6 +55,44 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
     await terminal._respond_to_invitation("start")
     assert terminal._mode == InteractionMode.PRACTICE_PROMPT
     assert requests == ["/v1/proactive/check", "/v1/proactive/invitations/invite-1/respond"]
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_proactive_review_acceptance_enters_the_same_review_mode() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/proactive/invitations/invite-1/respond":
+            return httpx.Response(
+                200,
+                json={
+                    "invitation": {
+                        "id": "invite-1",
+                        "kind": "review",
+                        "status": "accepted",
+                        "created_at": "2026-08-21T12:00:00+00:00",
+                    },
+                    "review_question": {
+                        "id": "item-1",
+                        "prompt": "我很累",
+                        "kind": "expression",
+                        "position": 1,
+                    },
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._pending_invitation = {"id": "invite-1", "kind": "review"}
+
+    await terminal._respond_to_invitation("start")
+
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._active_review_item_id == "item-1"
+    assert terminal._input.placeholder == "Answer the review question..."
     await terminal._client.aclose()
 
 
@@ -234,10 +277,14 @@ async def test_review_state_survives_interleaved_command_and_advances_on_answer(
 
     await terminal._send_command("/review")
     assert terminal._active_review_item_id == "item-1"
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._input.placeholder == "Answer the review question..."
     await terminal._send_command("/status")
     assert terminal._active_review_item_id == "item-1"
+    assert terminal._mode == InteractionMode.REVIEW
     await terminal._submit_review_answer("I am tired")
     assert terminal._active_review_item_id is None
+    assert terminal._mode == InteractionMode.NORMAL
     assert any("Complete" in value for value in sink.values)
     await terminal._client.aclose()
 
@@ -252,10 +299,12 @@ async def test_review_network_failure_keeps_active_question() -> None:
     terminal._client = httpx.AsyncClient(
         base_url="http://test", transport=httpx.MockTransport(handler)
     )
-    terminal._active_review_item_id = "item-1"
+    terminal._enter_review("item-1")
     with pytest.raises(httpx.ConnectError):
         await terminal._submit_review_answer("answer")
     assert terminal._active_review_item_id == "item-1"
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._input.placeholder == "Answer the review question..."
     await terminal._client.aclose()
 
 
@@ -275,11 +324,13 @@ async def test_review_quit_clears_active_question_without_answer_request() -> No
     terminal._client = httpx.AsyncClient(
         base_url="http://test", transport=httpx.MockTransport(handler)
     )
-    terminal._active_review_item_id = "item-1"
+    terminal._enter_review("item-1")
 
-    await terminal._send_command("/review quit")
+    await terminal.action_cancel_intent()
 
     assert terminal._active_review_item_id is None
+    assert terminal._mode == InteractionMode.NORMAL
+    assert terminal._input.placeholder == "Say something..."
     assert paths == ["/v1/commands/execute"]
     await terminal._client.aclose()
 
@@ -538,6 +589,7 @@ def test_check_action_hides_primary_intents_mid_capture() -> None:
     terminal._mode = InteractionMode.AWAITING_HELP_SENTENCE
 
     assert terminal.check_action("help_intent", ()) is False
+    assert terminal.check_action("hint_intent", ()) is False
     assert terminal.check_action("review_intent", ()) is False
     assert terminal.check_action("cancel_intent", ()) is True
 
@@ -549,3 +601,55 @@ def test_check_action_only_shows_use_suggestion_in_help_result() -> None:
     terminal._mode = InteractionMode.HELP_RESULT
     terminal._pending_help_expression = "I skipped class today."
     assert terminal.check_action("use_suggestion", ()) is True
+
+
+@pytest.mark.asyncio
+async def test_review_owns_input_and_blocks_help_or_hint_entry_points() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, request.content.decode()))
+        if request.url.path == "/v1/review/item-1/answer":
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "correct": False,
+                        "accepted_answers": ["Hello", "Hi", "Hey"],
+                        "stage": 0,
+                        "next_review_at": "2026-08-24T03:43:57+08:00",
+                        "next_question": None,
+                        "complete": True,
+                    }
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._enter_review("item-1")
+
+    await terminal.action_hint_intent()
+    await terminal.action_help_intent()
+
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._active_review_item_id == "item-1"
+    assert terminal._input.placeholder == "Answer the review question..."
+    assert [str(button.label) for button in terminal._action_buttons] == [
+        "",
+        "",
+        "Stop review",
+    ]
+    assert requests == []
+
+    await terminal.on_input_submitted(Input.Submitted(terminal._input, "love you"))
+
+    assert requests == [
+        ("/v1/review/item-1/answer", '{"answer":"love you"}'),
+    ]
+    assert_mode(terminal, InteractionMode.NORMAL)
+    assert terminal._active_review_item_id is None
+    await terminal._client.aclose()
