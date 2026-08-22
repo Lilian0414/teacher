@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import datetime
 from uuid import uuid4
 
@@ -63,11 +64,13 @@ class MemoryRepository:
         source_conversation_id: str | None,
         confidence: float | None,
         now: datetime,
+        embedding: list[float] | None = None,
     ) -> Memory:
         memory = Memory(
             id=str(uuid4()),
             category=category.value,
             content=content.strip(),
+            embedding=self.encode_embedding(embedding),
             person_id=person_id,
             source_conversation_id=source_conversation_id,
             confidence=confidence,
@@ -144,9 +147,12 @@ class MemoryRepository:
         source_conversation_id: str | None,
         confidence: float | None,
         now: datetime,
+        embedding: list[float] | None = None,
     ) -> Memory:
         if content is not None:
             memory.content = content.strip()
+        if content is not None or embedding is not None:
+            memory.embedding = self.encode_embedding(embedding)
         if category is not None:
             memory.category = category.value
         if person_id is not None:
@@ -172,6 +178,27 @@ class MemoryRepository:
     def decode_aliases(person: Person) -> list[str]:
         data = json.loads(person.aliases)
         return [str(item) for item in data] if isinstance(data, list) else []
+
+    @staticmethod
+    def encode_embedding(embedding: list[float] | None) -> str | None:
+        if embedding is None:
+            return None
+        return json.dumps(embedding, separators=(",", ":"))
+
+    @staticmethod
+    def decode_embedding(memory: Memory) -> list[float] | None:
+        if memory.embedding is None:
+            return None
+        try:
+            data = json.loads(memory.embedding)
+            if not isinstance(data, list):
+                return None
+            embedding = [float(item) for item in data]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not embedding or not all(math.isfinite(value) for value in embedding):
+            return None
+        return embedding
 
 
 def normalize_content(content: str) -> str:

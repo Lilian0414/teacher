@@ -3,8 +3,8 @@
 ## 已完成範圍
 
 M2 讓 Core 保存、搜尋、軟刪除與 recall 使用者長期記憶，並在 conversation
-結束時抽取值得保留的 user facts。所有資料保存於 SQLite，不使用 RAG、
-embedding 或 vector database。
+結束時抽取值得保留的 user facts。資料保存於 SQLite；在有配置 embedding provider
+時使用混合語意檢索，未配置或 provider 暫時失敗時則保留原本的詞彙檢索行為。
 
 ## 分類與狀態
 
@@ -53,19 +53,43 @@ request，並逐筆套用 deterministic policy：
 - candidate 可明確更新既有 active memory。
 - provider extraction error 不影響 conversation 已結束的狀態，並以受控錯誤回傳。
 
-## Recall
+## Hybrid recall
 
-`MemoryContextBuilder` 以人物名稱、英文詞彙重疊與中文 bigram relevance 排序。
-每次一般聊天最多選取五筆 active memories，排除無關與 deleted memories。
-注入的 prompt 不含 memory ID，並提醒模型記憶可能過時。
+`MemoryContextBuilder` 在最多 200 筆近期 active memories 的 bounded candidate set 上，
+組合以下 deterministic signals：
 
-## 資料模型
+- 人物 canonical name／alias 命中。
+- 英文詞彙重疊與中文 bigram 重疊。
+- embedding cosine similarity（只有相似度達最低門檻時才計分）。
+
+混合分數排序後，每次一般聊天仍最多注入五筆記憶。人物與詞彙訊號保留原有權重，
+語意訊號讓「remembering new vocabulary」與「forgetting new words」這類低字面重疊
+的改寫仍能被召回。deleted memories 在 candidate query 階段即被排除。
+
+`EmbeddingProvider` 是同步、provider-neutral 的小型 protocol。Memory write／update 會
+儲存 provider 產生的向量，query 則只產生一次向量再對 candidates rerank。一般測試
+使用 deterministic fake provider，不呼叫外部 API。
+
+未配置 provider、provider 丟出例外、回傳空值／非有限數值，或既有 memory 尚未有
+embedding 時，都會安全降級成既有 lexical/person recall；普通聊天與記憶保存不會因
+embedding failure 中斷。內容更新但新 embedding 失敗時會清除舊向量，避免 stale vector。
+
+## 資料模型與遷移
 
 - `people`：canonical name、aliases、relationship 與 timestamps。
-- `memories`：category、content、optional person、source conversation、
-  confidence、status 與 timestamps。
+- `memories`：category、content、nullable JSON embedding、optional person、source
+  conversation、confidence、status 與 timestamps。
 
-Alembic migration 位於 `migrations/versions/20260719_0003_create_long_term_memory.py`。
+基礎 memory migration 位於
+`migrations/versions/20260719_0003_create_long_term_memory.py`；nullable embedding 欄位由
+`migrations/versions/20260822_0006_add_memory_embeddings.py` 加入，因此既有 SQLite DB
+可以直接 `alembic upgrade head`，不需要資料庫重建。既有 rows 不做昂貴 backfill，
+在重新寫入前繼續使用 lexical/person signals。
+
+目前 SQLite 以 JSON 儲存向量並在 bounded candidates 內計算 cosine similarity，適合本
+機里程碑但不是大型 vector index。未來遷移 PostgreSQL + pgvector 時，可在
+`MemoryRepository`／`EmbeddingProvider` boundary 後替換 persistence 與 nearest-neighbor
+search，不需重寫 `MemoryService` 或 prompt builder。
 
 ## 尚未實作
 
@@ -79,7 +103,9 @@ API 都不屬於目前 M2。這些功能必須透過未來 OpenSpec change 才�
 - conversation-end extraction 與重複呼叫不重複建立。
 - 非 user／未知 source、一般寒暄與 exact duplicate rejection。
 - provider extraction failure 的受控結果。
-- relevance recall 只選 active memories 且最多五筆。
+- semantic paraphrase、lexical/person hybrid ranking、deleted exclusion 與 Top 5 bound。
+- embedding write/query failure 的 lexical fallback。
+- SQLite embedding persistence 與 Alembic upgrade/downgrade。
 - restart 後記憶仍存在。
 
-一般 Ruff、strict mypy 與 pytest 不得呼叫 Groq。
+一般 Ruff、strict mypy 與 pytest 不得呼叫 Groq 或任何外部 embedding API。

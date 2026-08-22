@@ -12,11 +12,30 @@ from companion.memory.schemas import (
     MemoryStatus,
 )
 from companion.persistence.database import Base, make_engine
+from companion.providers.embeddings import EmbeddingProvider
 from companion.schemas.conversation import MessageRole
 from tests.support import RecordingLLMProvider
 
 
-def make_memory_services() -> tuple[
+class DeterministicEmbeddingProvider:
+    def __init__(
+        self,
+        vectors: dict[str, list[float]],
+        *,
+        fail_for: set[str] | None = None,
+    ) -> None:
+        self._vectors = vectors
+        self._fail_for = fail_for or set()
+
+    def embed(self, text: str) -> list[float]:
+        if text in self._fail_for:
+            raise RuntimeError("embedding provider unavailable")
+        return list(self._vectors.get(text, [0.0, 0.0]))
+
+
+def make_memory_services(
+    embedding_provider: EmbeddingProvider | None = None,
+) -> tuple[
     Session,
     ConversationRepository,
     MemoryRepository,
@@ -33,6 +52,7 @@ def make_memory_services() -> tuple[
         repository=memories,
         conversation_repository=conversations,
         llm_provider=provider,
+        embedding_provider=embedding_provider,
         clock=lambda: datetime(2026, 7, 19, 12, tzinfo=UTC),
     )
     return session, conversations, memories, service, provider
@@ -207,3 +227,101 @@ def test_memory_context_selects_only_relevant_memories_and_limits_to_five() -> N
     assert len(selected) == 5
     assert all("Andy" in memory.content for memory in selected)
     assert all(memory.status == MemoryStatus.ACTIVE for memory in selected)
+
+
+@pytest.mark.asyncio
+async def test_hybrid_retrieval_recalls_semantic_paraphrase_without_token_overlap() -> None:
+    memory_text = "The learner struggles with remembering new vocabulary."
+    query = "I keep forgetting new words."
+    irrelevant = "Weekend hiking feels relaxing."
+    embedding_provider = DeterministicEmbeddingProvider(
+        {
+            memory_text: [1.0, 0.0],
+            query: [1.0, 0.0],
+            irrelevant: [0.0, 1.0],
+        }
+    )
+    _, _, repository, service, _ = make_memory_services(embedding_provider)
+    await service.remember(memory_text)
+    await service.remember(irrelevant)
+
+    selected = MemoryContextBuilder(
+        repository,
+        embedding_provider=embedding_provider,
+    ).select(query)
+
+    assert [memory.content for memory in selected] == [memory_text]
+
+
+@pytest.mark.asyncio
+async def test_deleted_semantic_memory_is_never_recalled() -> None:
+    memory_text = "The learner struggles with remembering new vocabulary."
+    query = "I keep forgetting new words."
+    embedding_provider = DeterministicEmbeddingProvider(
+        {memory_text: [1.0, 0.0], query: [1.0, 0.0]}
+    )
+    _, _, repository, service, _ = make_memory_services(embedding_provider)
+    remembered = await service.remember(memory_text)
+    service.forget(remembered.id)
+
+    selected = MemoryContextBuilder(
+        repository,
+        embedding_provider=embedding_provider,
+    ).select(query)
+
+    assert selected == []
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_failure_falls_back_to_lexical_retrieval() -> None:
+    memory_text = "Andy practices chess every Friday."
+    query = "What does Andy practice on Friday?"
+    embedding_provider = DeterministicEmbeddingProvider(
+        {memory_text: [1.0, 0.0]},
+        fail_for={query},
+    )
+    _, _, repository, service, provider = make_memory_services(embedding_provider)
+    provider.memory_analysis = MemoryAnalysis(
+        category=MemoryCategory.PEOPLE,
+        person_name="Andy",
+        confidence=1.0,
+    )
+    await service.remember(memory_text)
+
+    selected = MemoryContextBuilder(
+        repository,
+        embedding_provider=embedding_provider,
+    ).select(query)
+
+    assert [memory.content for memory in selected] == [memory_text]
+
+
+@pytest.mark.asyncio
+async def test_embedding_is_persisted_and_decoded_without_provider_calls() -> None:
+    memory_text = "The learner prefers short practice sessions."
+    embedding_provider = DeterministicEmbeddingProvider({memory_text: [0.25, 0.75]})
+    session, _, repository, service, _ = make_memory_services(embedding_provider)
+    await service.remember(memory_text)
+
+    memory_id = repository.list_memories()[0].id
+    session.expire_all()
+    reloaded = repository.get_memory(memory_id)
+
+    assert reloaded is not None
+    assert repository.decode_embedding(reloaded) == [0.25, 0.75]
+
+
+@pytest.mark.asyncio
+async def test_write_embedding_failure_still_saves_memory_for_lexical_recall() -> None:
+    memory_text = "The learner reviews vocabulary at breakfast."
+    embedding_provider = DeterministicEmbeddingProvider({}, fail_for={memory_text})
+    _, _, repository, service, _ = make_memory_services(embedding_provider)
+
+    remembered = await service.remember(memory_text)
+
+    stored = repository.get_memory(remembered.id)
+    assert stored is not None
+    assert repository.decode_embedding(stored) is None
+    assert [item.id for item in MemoryContextBuilder(repository).select("vocabulary")] == [
+        remembered.id
+    ]

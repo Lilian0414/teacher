@@ -1,3 +1,4 @@
+import math
 import re
 
 from companion.memory.prompts import memory_context_prompt
@@ -5,21 +6,39 @@ from companion.memory.repository import MemoryRepository
 from companion.memory.schemas import MemoryCategory, MemorySchema, MemoryStatus
 from companion.persistence.models import Memory
 from companion.persistence.repositories import decode_dt
+from companion.providers.embeddings import EmbeddingProvider, normalize_embedding
 
 WORD_PATTERN = re.compile(r"[A-Za-z0-9']+")
 CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+SEMANTIC_WEIGHT = 8.0
+MIN_SEMANTIC_SIMILARITY = 0.35
 
 
 class MemoryContextBuilder:
-    def __init__(self, repository: MemoryRepository, *, limit: int = 5) -> None:
+    def __init__(
+        self,
+        repository: MemoryRepository,
+        *,
+        limit: int = 5,
+        embedding_provider: EmbeddingProvider | None = None,
+        candidate_limit: int = 200,
+    ) -> None:
         self._repository = repository
         self._limit = limit
+        self._embedding_provider = embedding_provider
+        self._candidate_limit = candidate_limit
 
     def select(self, current_message: str) -> list[MemorySchema]:
-        ranked: list[tuple[int, MemorySchema]] = []
-        for memory in self._repository.list_memories(limit=200):
+        query_embedding = self._embed(current_message)
+        ranked: list[tuple[float, MemorySchema]] = []
+        for memory in self._repository.list_memories(limit=self._candidate_limit):
             schema = memory_to_schema(memory, self._repository)
-            score = relevance_score(current_message, schema)
+            score = hybrid_relevance_score(
+                current_message,
+                schema,
+                query_embedding=query_embedding,
+                memory_embedding=self._repository.decode_embedding(memory),
+            )
             if score > 0:
                 ranked.append((score, schema))
         ranked.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
@@ -39,6 +58,16 @@ class MemoryContextBuilder:
         ]
         return memory_context_prompt(contents)
 
+    def _embed(self, text: str) -> list[float] | None:
+        if self._embedding_provider is None:
+            return None
+        try:
+            return normalize_embedding(self._embedding_provider.embed(text))
+        except Exception:
+            # Recall must remain available through lexical/person signals when a
+            # configured provider is temporarily unavailable.
+            return None
+
 
 def relevance_score(query: str, memory: MemorySchema) -> int:
     query_folded = query.casefold()
@@ -54,6 +83,36 @@ def relevance_score(query: str, memory: MemorySchema) -> int:
     memory_bigrams = _cjk_bigrams(memory.content)
     score += len(query_bigrams & memory_bigrams)
     return score
+
+
+def hybrid_relevance_score(
+    query: str,
+    memory: MemorySchema,
+    *,
+    query_embedding: list[float] | None,
+    memory_embedding: list[float] | None,
+) -> float:
+    lexical_person_score = float(relevance_score(query, memory))
+    similarity = cosine_similarity(query_embedding, memory_embedding)
+    semantic_score = (
+        similarity * SEMANTIC_WEIGHT if similarity >= MIN_SEMANTIC_SIMILARITY else 0.0
+    )
+    return lexical_person_score + semantic_score
+
+
+def cosine_similarity(
+    first: list[float] | None,
+    second: list[float] | None,
+) -> float:
+    if first is None or second is None or len(first) != len(second) or not first:
+        return 0.0
+    first_norm = math.sqrt(sum(value * value for value in first))
+    second_norm = math.sqrt(sum(value * value for value in second))
+    if first_norm == 0.0 or second_norm == 0.0:
+        return 0.0
+    return sum(left * right for left, right in zip(first, second, strict=True)) / (
+        first_norm * second_norm
+    )
 
 
 def memory_to_schema(memory: Memory, repository: MemoryRepository) -> MemorySchema:

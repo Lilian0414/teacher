@@ -18,6 +18,7 @@ from companion.memory.schemas import (
     MemoryStatus,
 )
 from companion.persistence.models import Memory
+from companion.providers.embeddings import EmbeddingProvider, normalize_embedding
 from companion.providers.errors import LLMProviderError
 from companion.providers.protocols import LLMProvider
 from companion.schemas.conversation import MessageRole
@@ -36,11 +37,13 @@ class MemoryService:
         repository: MemoryRepository,
         conversation_repository: ConversationRepository,
         llm_provider: LLMProvider,
+        embedding_provider: EmbeddingProvider | None = None,
         clock: Clock = system_clock,
     ) -> None:
         self._repository = repository
         self._conversation_repository = conversation_repository
         self._llm_provider = llm_provider
+        self._embedding_provider = embedding_provider
         self._clock = clock
 
     async def remember(self, content: str) -> MemorySchema:
@@ -169,6 +172,7 @@ class MemoryService:
         updates_memory_id: str | None,
     ) -> tuple[Memory, bool]:
         now = self._clock()
+        embedding = self._embed(content)
         person = None
         if person_name:
             person = self._repository.get_or_create_person(
@@ -189,6 +193,7 @@ class MemoryService:
                         source_conversation_id=source_conversation_id,
                         confidence=confidence,
                         now=now,
+                        embedding=embedding,
                     ),
                     False,
                 )
@@ -207,6 +212,7 @@ class MemoryService:
                     source_conversation_id=source_conversation_id,
                     confidence=confidence,
                     now=now,
+                    embedding=embedding,
                 ),
                 False,
             )
@@ -218,9 +224,20 @@ class MemoryService:
                 source_conversation_id=source_conversation_id,
                 confidence=confidence,
                 now=now,
+                embedding=embedding,
             ),
             True,
         )
+
+    def _embed(self, text: str) -> list[float] | None:
+        if self._embedding_provider is None:
+            return None
+        try:
+            return normalize_embedding(self._embedding_provider.embed(text))
+        except Exception:
+            # Storing the memory remains more important than optional semantic
+            # metadata when the embedding provider is unavailable.
+            return None
 
 
 def _is_trivial_message(content: str) -> bool:
