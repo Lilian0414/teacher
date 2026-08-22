@@ -23,6 +23,7 @@ def test_m3_migration_upgrades_and_downgrades(tmp_path: Path) -> None:
     )
     inspector = inspect(make_engine(f"sqlite:///{database_path}"))
     assert {"learning_items", "learning_attempts"} <= set(inspector.get_table_names())
+    assert "embedding" in {column["name"] for column in inspector.get_columns("memories")}
 
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "20260719_0003"],
@@ -34,3 +35,4 @@ def test_m3_migration_upgrades_and_downgrades(tmp_path: Path) -> None:
     inspector = inspect(make_engine(f"sqlite:///{database_path}"))
     assert "learning_items" not in inspector.get_table_names()
     assert "memories" in inspector.get_table_names()
+    assert "embedding" not in {column["name"] for column in inspector.get_columns("memories")}
