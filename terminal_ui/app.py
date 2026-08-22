@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, cast
 
@@ -23,7 +24,20 @@ class InteractionMode(StrEnum):
     AWAITING_HELP_SENTENCE = "awaiting_help_sentence"
     AWAITING_HINT_SENTENCE = "awaiting_hint_sentence"
     HELP_RESULT = "help_result"
+    REVIEW = "review"
     PRACTICE_PROMPT = "practice_prompt"
+
+
+@dataclass(frozen=True)
+class InteractionState:
+    """The single owner of submitted non-command input."""
+
+    mode: InteractionMode = InteractionMode.NORMAL
+    review_item_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.mode == InteractionMode.REVIEW) != (self.review_item_id is not None):
+            raise ValueError("review_item_id is required only while reviewing")
 
 
 class CompanionTerminal(App[None]):
@@ -93,9 +107,8 @@ class CompanionTerminal(App[None]):
         ]
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
-        self._active_review_item_id: str | None = None
         self._waiting = False
-        self._mode = InteractionMode.NORMAL
+        self._state = InteractionState()
         self._pending_help_content: str | None = None
         self._pending_help_expression: str | None = None
         self._due_review_count = 0
@@ -132,6 +145,11 @@ class CompanionTerminal(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action in {"help_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
+        if action == "hint_intent":
+            return self._mode == InteractionMode.NORMAL or (
+                self._mode == InteractionMode.HELP_RESULT
+                and self._pending_help_content is not None
+            )
         if action == "use_suggestion":
             return (
                 self._mode == InteractionMode.HELP_RESULT
@@ -140,6 +158,26 @@ class CompanionTerminal(App[None]):
         if action == "cancel_intent":
             return self._mode != InteractionMode.NORMAL
         return True
+
+    @property
+    def _mode(self) -> InteractionMode:
+        return self._state.mode
+
+    def _transition(
+        self, mode: InteractionMode, *, review_item_id: str | None = None
+    ) -> None:
+        self._state = InteractionState(mode, review_item_id)
+        if mode == InteractionMode.REVIEW:
+            self._input.placeholder = "Answer the review question..."
+        elif mode in (
+            InteractionMode.AWAITING_HELP_SENTENCE,
+            InteractionMode.AWAITING_HINT_SENTENCE,
+        ):
+            self._input.placeholder = "What do you want to say?"
+        else:
+            self._input.placeholder = "Say something..."
+        self._after_mode_change()
+        self._focus_input()
 
     async def action_help_intent(self) -> None:
         if self._waiting or self._mode != InteractionMode.NORMAL:
@@ -174,6 +212,9 @@ class CompanionTerminal(App[None]):
 
     async def action_cancel_intent(self) -> None:
         if self._mode == InteractionMode.NORMAL:
+            return
+        if self._mode == InteractionMode.REVIEW:
+            await self._run_guarded(lambda: self._send_command("/review quit"))
             return
         was_help_result = self._mode == InteractionMode.HELP_RESULT
         self._reset_to_normal()
@@ -226,8 +267,7 @@ class CompanionTerminal(App[None]):
             and suggestion.strip()
         ):
             self._pending_help_expression = suggestion.strip()
-            self._mode = InteractionMode.HELP_RESULT
-            self._after_mode_change()
+            self._transition(InteractionMode.HELP_RESULT)
             self._messages.write("Actions:\n- Use this\n- Hint only\n- Try myself")
         else:
             self._reset_to_normal()
@@ -238,21 +278,15 @@ class CompanionTerminal(App[None]):
         self._reset_to_normal()
 
     def _begin_capture(self, mode: InteractionMode) -> None:
-        self._mode = mode
         self._pending_help_content = None
         self._pending_help_expression = None
-        self._input.placeholder = "What do you want to say?"
+        self._transition(mode)
         self._messages.write("What do you want to say?")
-        self._after_mode_change()
-        self._focus_input()
 
     def _reset_to_normal(self) -> None:
-        self._mode = InteractionMode.NORMAL
         self._pending_help_content = None
         self._pending_help_expression = None
-        self._input.placeholder = "Say something..."
-        self._after_mode_change()
-        self._focus_input()
+        self._transition(InteractionMode.NORMAL)
 
     def _after_mode_change(self) -> None:
         self._refresh_action_buttons()
@@ -290,6 +324,8 @@ class CompanionTerminal(App[None]):
             InteractionMode.AWAITING_HINT_SENTENCE,
         ):
             return [None, None, ("Cancel", "cancel_intent")]
+        if self._mode == InteractionMode.REVIEW:
+            return [None, None, ("Quit review", "cancel_intent")]
         return [
             ("Help me say it", "help_intent"),
             ("Give me a hint", "hint_intent"),
@@ -333,7 +369,7 @@ class CompanionTerminal(App[None]):
             self._messages.write("Please choose an action: Use this / Hint only / Try myself.")
         elif raw.startswith("/"):
             await self._run_guarded(lambda: self._send_command(raw))
-        elif self._active_review_item_id is not None:
+        elif self._mode == InteractionMode.REVIEW:
             await self._run_guarded(lambda: self._submit_review_answer(raw))
         else:
             await self._run_guarded(lambda: self._send_chat_message(raw))
@@ -341,8 +377,11 @@ class CompanionTerminal(App[None]):
                 self._reset_to_normal()
 
     def _can_present_invitation(self) -> bool:
-        return (not self._waiting and self._mode == InteractionMode.NORMAL
-                and self._active_review_item_id is None and self._pending_invitation is None)
+        return (
+            not self._waiting
+            and self._mode == InteractionMode.NORMAL
+            and self._pending_invitation is None
+        )
 
     async def check_proactive_invitation(self) -> None:
         try:
@@ -386,14 +425,13 @@ class CompanionTerminal(App[None]):
             return
         question = payload.get("review_question")
         if isinstance(question, dict):
-            self._active_review_item_id = str(question["id"])
+            self._transition(InteractionMode.REVIEW, review_item_id=str(question["id"]))
             self._messages.write(self._format_review_question(question))
         elif payload.get("review_complete"):
             self._messages.write("No items are due. Review complete.")
         elif isinstance(payload.get("conversation_starter"), str):
-            self._mode = InteractionMode.PRACTICE_PROMPT
+            self._transition(InteractionMode.PRACTICE_PROMPT)
             self._messages.write(f"Practice prompt: {payload['conversation_starter']}")
-            self._after_mode_change()
 
     def _hide_invitation(self) -> None:
         self._pending_invitation = None
@@ -430,16 +468,18 @@ class CompanionTerminal(App[None]):
         command = result.get("command")
         if command == "review" and result.get("ok"):
             question = result.get("review_question")
-            self._active_review_item_id = (
-                str(question["id"]) if isinstance(question, dict) else None
-            )
+            if isinstance(question, dict):
+                self._transition(InteractionMode.REVIEW, review_item_id=str(question["id"]))
+            else:
+                self._reset_to_normal()
         elif command == "review_quit" and result.get("ok"):
-            self._active_review_item_id = None
+            self._reset_to_normal()
 
     async def _submit_review_answer(self, answer: str) -> None:
-        item_id = self._active_review_item_id
-        if item_id is None:
+        if self._mode != InteractionMode.REVIEW:
             return
+        item_id = self._state.review_item_id
+        assert item_id is not None
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",
             json={"answer": answer},
@@ -451,9 +491,12 @@ class CompanionTerminal(App[None]):
             raise ValueError("Invalid review response")
         self._messages.write(self._format_review_result(result))
         next_question = result.get("next_question")
-        self._active_review_item_id = (
-            str(next_question["id"]) if isinstance(next_question, dict) else None
-        )
+        if isinstance(next_question, dict):
+            self._transition(
+                InteractionMode.REVIEW, review_item_id=str(next_question["id"])
+            )
+        else:
+            self._reset_to_normal()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
         await self.ensure_conversation()
