@@ -72,13 +72,31 @@ states, memory editing, proactive-use permissions, proactive invitations and bac
 voice, hardware, webcam, and file tools are future work. LangChain, Mem0, and Letta are
 intentionally outside the current architecture.
 
-## Setup
+## Setup and run (Apple Silicon)
+
+Python 3.12 and a normal virtual environment are sufficient; no Intel Homebrew paths are
+required. From a fresh clone:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
+alembic upgrade head
+companion
 ```
+
+`companion` starts Core and the terminal UI together. Two-process development remains available:
+
+```bash
+companion-core
+# in another terminal
+companion-ui
+```
+
+Core and UI share `COMPANION_HOST` and `COMPANION_PORT`. The default SQLite database is
+`~/Library/Application Support/ai-learning-companion/companion.sqlite3`, independent of the
+current directory. Override it with an absolute URL such as
+`COMPANION_DATABASE_URL=sqlite:////Users/me/data/companion.sqlite3`.
 
 ## Groq Settings
 
@@ -92,41 +110,15 @@ MEMORY_CONTEXT_LIMIT=5
 LEARNING_CONTEXT_LIMIT=3
 ```
 
-Keep real `GROQ_API_KEY` values in `.env` or the shell environment only.
-`.env.example` intentionally leaves the key blank.
-
-## Run Core
-
-```bash
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/uvicorn companion.main:app --reload
-```
-
-## Migration
-
-```bash
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/alembic upgrade head
-```
-
-## Run UI
-
-```bash
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/python -m terminal_ui.app
-```
+Keep real `GROQ_API_KEY` values in `.env` or the shell environment only. `/v1/state` reports a
+present key as `key_present_unverified` until an actual request proves the configured model is
+usable. Provider/model failures include the model and Groq's safe error detail, never the key.
 
 ## Validate
 
 ```bash
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/ruff check .
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/mypy .
-DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib .venv/bin/pytest
+ruff check .
+mypy .
+pytest
+python -m build
 ```
-
-Live Groq smoke test:
-
-```bash
-RUN_LIVE_API_TESTS=1 DYLD_LIBRARY_PATH=/usr/local/opt/expat/lib \
-  .venv/bin/pytest tests/live/test_groq_live.py
-```
-
-On this Mac, Homebrew Python 3.12 needs the `DYLD_LIBRARY_PATH` above so `pyexpat`
-loads Homebrew `expat` instead of the older system library.

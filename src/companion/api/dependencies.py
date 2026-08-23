@@ -23,14 +23,14 @@ def get_llm_status() -> LLMStatus:
             provider="groq",
             model=settings.groq_model,
             configured=configured,
-            status="configured" if configured else "unavailable",
+            status="key_present_unverified" if configured else "missing_api_key",
         )
     if settings.llm_provider == "fake":
         return LLMStatus(
             provider="fake",
             model=None,
             configured=True,
-            status="configured",
+            status="usable",
         )
     return LLMStatus(
         provider=settings.llm_provider,

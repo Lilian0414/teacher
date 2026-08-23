@@ -236,7 +236,18 @@ class GroqLLMProvider:
         if response.status_code >= 500:
             raise LLMTemporaryError("LLM service is temporarily unavailable")
         if response.status_code >= 400:
-            raise LLMInvalidResponseError("LLM request failed")
+            detail = ""
+            try:
+                payload = response.json()
+                error = payload.get("error", {})
+                if isinstance(error, dict):
+                    detail = str(error.get("message", ""))
+            except ValueError:
+                pass
+            message = f"Groq rejected model '{self._model}'"
+            if detail:
+                message = f"{message}: {detail}"
+            raise LLMInvalidResponseError(message)
 
         try:
             data = response.json()

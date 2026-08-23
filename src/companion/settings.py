@@ -5,6 +5,12 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def default_database_url() -> str:
+    """Return a database URL that never depends on the process working directory."""
+    data_dir = Path.home() / "Library" / "Application Support" / "ai-learning-companion"
+    return f"sqlite:///{data_dir / 'companion.sqlite3'}"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -16,7 +22,7 @@ class Settings(BaseSettings):
     app_name: str = "AI Learning Companion Core"
     host: str = "127.0.0.1"
     port: int = 8000
-    database_url: str = "sqlite:///./data/companion.sqlite3"
+    database_url: str = Field(default_factory=default_database_url)
     timezone: str = "Asia/Taipei"
     user_id: str = "default"
     schema_version: int = Field(default=1, ge=1)
@@ -82,6 +88,10 @@ class Settings(BaseSettings):
         if not self.database_url.startswith(prefix):
             return None
         return Path(self.database_url.removeprefix(prefix))
+
+    @property
+    def core_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
 
 
 @lru_cache
