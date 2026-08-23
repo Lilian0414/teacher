@@ -54,12 +54,14 @@ class LearningService:
 
     def first_due(self) -> ReviewQuestion | None:
         items = self._repository.due_items(user_id=self._user_id, now=self._clock(), limit=1)
-        return self._question(items[0]) if items else None
+        return self._question(items[0], total=self.due_count()) if items else None
 
     def due_count(self) -> int:
         return self._repository.due_count(user_id=self._user_id, now=self._clock())
 
-    def answer(self, *, item_id: str, answer: str) -> ReviewResult:
+    def answer(
+        self, *, item_id: str, answer: str, position: int = 1, total: int = 1
+    ) -> ReviewResult:
         now = self._clock()
         item = self._repository.get_item(item_id, user_id=self._user_id)
         if item is None:
@@ -82,9 +84,22 @@ class LearningService:
             next_review_at=next_review_at,
             attempted_at=now,
         )
-        next_question = self.first_due()
+        next_items = self._repository.due_items(user_id=self._user_id, now=now, limit=1)
+        remaining = self._repository.due_count(user_id=self._user_id, now=now)
+        next_question = (
+            self._question(
+                next_items[0],
+                position=position + 1,
+                total=max(total, position + remaining),
+                remaining=remaining,
+            )
+            if next_items
+            else None
+        )
         return ReviewResult(
             correct=correct,
+            prompt=item.prompt,
+            submitted_answer=answer.strip(),
             accepted_answers=accepted,
             stage=stage_after,
             next_review_at=next_review_at,
@@ -111,11 +126,20 @@ class LearningService:
         return answers
 
     @staticmethod
-    def _question(item: LearningItem) -> ReviewQuestion:
+    def _question(
+        item: LearningItem,
+        *,
+        position: int = 1,
+        total: int = 1,
+        remaining: int | None = None,
+    ) -> ReviewQuestion:
         return ReviewQuestion(
             id=item.id,
             prompt=item.prompt,
             kind=LearningKind(item.kind),
+            position=position,
+            total=total,
+            remaining=total - position + 1 if remaining is None else remaining,
         )
 
     def _schema(self, item: LearningItem) -> LearningItemSchema:

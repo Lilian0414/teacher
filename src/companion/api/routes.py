@@ -358,7 +358,12 @@ async def submit_review_answer(
     learning_service: LearningService = LearningDependency,
 ) -> ReviewSubmissionResponse:
     try:
-        result = learning_service.answer(item_id=item_id, answer=request.answer)
+        result = learning_service.answer(
+            item_id=item_id,
+            answer=request.answer,
+            position=request.position,
+            total=request.total,
+        )
     except LearningItemNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Learning item not found") from exc
     except LearningItemNotDueError as exc:

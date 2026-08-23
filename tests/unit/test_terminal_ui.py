@@ -214,23 +214,35 @@ def test_memory_list_and_forget_confirmation_are_rendered() -> None:
 
 
 def test_review_question_and_feedback_are_rendered_without_early_answers() -> None:
-    question = {"id": "item-1", "prompt": "我很累", "kind": "expression", "position": 1}
+    question = {
+        "id": "item-1",
+        "prompt": "我很累",
+        "kind": "expression",
+        "position": 1,
+        "total": 2,
+        "remaining": 2,
+    }
     started = CompanionTerminal._format_command_result(
         {"command": "review", "ok": True, "review_question": question}
     )
     feedback = CompanionTerminal._format_review_result(
         {
             "correct": False,
+            "prompt": "我很累",
+            "submitted_answer": "sleepy",
             "accepted_answers": ["I am tired."],
             "next_review_at": "2026-08-11T12:00:00+00:00",
             "next_question": None,
         }
     )
 
-    assert started == "Review item 1\n我很累 (expression)"
+    assert started == "Review item 1 of 2 (2 remaining)\n我很累 (expression)"
     assert "I am tired" not in started
     assert "[review" not in started
     assert "Incorrect" in feedback
+    assert "Prompt: 我很累" in feedback
+    assert "Your answer: sleepy" in feedback
+    assert "Tue, Aug 11 at 12:00 PM" in feedback
     assert "Complete" in feedback
 
 
@@ -648,7 +660,10 @@ async def test_review_owns_input_and_blocks_help_or_hint_entry_points() -> None:
     await terminal.on_input_submitted(Input.Submitted(terminal._input, "love you"))
 
     assert requests == [
-        ("/v1/review/item-1/answer", '{"answer":"love you"}'),
+        (
+            "/v1/review/item-1/answer",
+            '{"answer":"love you","position":1,"total":1}',
+        ),
     ]
     assert_mode(terminal, InteractionMode.NORMAL)
     assert terminal._active_review_item_id is None

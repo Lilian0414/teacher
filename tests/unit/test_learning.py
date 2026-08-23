@@ -46,6 +46,46 @@ def test_normalization_and_repeated_capture_merge_without_duplicate() -> None:
     assert len(repository.due_items(user_id="default", now=current[0])) == 1
 
 
+def test_help_then_hint_share_one_goal_and_review_progress_advances() -> None:
+    repository, service, _ = make_learning()
+    first = service.capture_assistance(
+        mode=LanguageHelpMode.HELP,
+        prompt="你好",
+        response=LanguageHelpResponse(natural_expression="Hello"),
+    )
+    second = service.capture_assistance(
+        mode=LanguageHelpMode.HINT,
+        prompt=" 你好！ ",
+        response=LanguageHelpResponse(hints=["Hi", "Hello"]),
+    )
+    other = service.capture_assistance(
+        mode=LanguageHelpMode.HELP,
+        prompt="再見",
+        response=LanguageHelpResponse(natural_expression="Goodbye"),
+    )
+
+    assert first is not None and second is not None and other is not None
+    assert first.id == second.id
+    assert second.accepted_answers == ["Hello", "Hi"]
+    question = service.first_due()
+    assert question is not None
+    assert (question.position, question.total, question.remaining) == (1, 2, 2)
+    stored = repository.get_item(question.id, user_id="default")
+    assert stored is not None
+    result = service.answer(
+        item_id=question.id,
+        answer=repository.answers(stored)[0],
+        position=question.position,
+        total=question.total,
+    )
+    assert result.next_question is not None
+    assert (
+        result.next_question.position,
+        result.next_question.total,
+        result.next_question.remaining,
+    ) == (2, 2, 1)
+
+
 def test_capture_rules_include_english_original_and_exclude_say_or_empty_chinese() -> None:
     _, service, _ = make_learning()
     english = service.capture_assistance(
