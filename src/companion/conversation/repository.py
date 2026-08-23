@@ -21,6 +21,10 @@ class ConversationRepository:
             private_mode=False,
             started_at=encode_dt(started_at),
             ended_at=None,
+            memory_extraction_status="not_started",
+            memory_extraction_attempts=0,
+            memory_extraction_error=None,
+            memory_extracted_at=None,
         )
         self._session.add(conversation)
         self._session.commit()
@@ -34,7 +38,43 @@ class ConversationRepository:
         conversation = self.get_conversation(conversation_id)
         if conversation is None:
             return None
-        conversation.ended_at = encode_dt(ended_at)
+        if conversation.ended_at is None:
+            conversation.ended_at = encode_dt(ended_at)
+            conversation.memory_extraction_status = "pending"
+        self._session.commit()
+        self._session.refresh(conversation)
+        return conversation
+
+    def list_recoverable(self, *, user_id: str) -> list[Conversation]:
+        statement: Select[tuple[Conversation]] = (
+            select(Conversation)
+            .where(
+                Conversation.user_id == user_id,
+                (Conversation.ended_at.is_(None))
+                | (Conversation.memory_extraction_status.in_(("pending", "failed"))),
+            )
+            .order_by(Conversation.started_at.asc())
+        )
+        return list(self._session.scalars(statement))
+
+    def start_extraction(self, conversation: Conversation) -> Conversation:
+        conversation.memory_extraction_status = "pending"
+        conversation.memory_extraction_attempts += 1
+        conversation.memory_extraction_error = None
+        self._session.commit()
+        self._session.refresh(conversation)
+        return conversation
+
+    def finish_extraction(
+        self,
+        conversation: Conversation,
+        *,
+        completed_at: datetime,
+        error: str | None,
+    ) -> Conversation:
+        conversation.memory_extraction_status = "failed" if error else "completed"
+        conversation.memory_extraction_error = error
+        conversation.memory_extracted_at = None if error else encode_dt(completed_at)
         self._session.commit()
         self._session.refresh(conversation)
         return conversation

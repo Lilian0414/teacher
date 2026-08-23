@@ -9,7 +9,12 @@ from companion.persistence.repositories import decode_dt
 from companion.providers.errors import LLMProviderError
 from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import ChatMessage, ChatRequest
-from companion.schemas.conversation import ConversationSchema, MessageRole, MessageSchema
+from companion.schemas.conversation import (
+    ConversationSchema,
+    MemoryExtractionStatus,
+    MessageRole,
+    MessageSchema,
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,10 @@ class SendMessageResult:
 
 
 class ConversationNotFoundError(Exception):
+    pass
+
+
+class ConversationEndedError(Exception):
     pass
 
 
@@ -66,8 +75,22 @@ class ConversationService:
         messages = self._repository.list_messages(conversation_id)
         return self._conversation_schema(conversation, messages)
 
+    def recover_interrupted_conversations(self) -> list[ConversationSchema]:
+        recovered: list[ConversationSchema] = []
+        for conversation in self._repository.list_recoverable(user_id=self._user_id):
+            if conversation.ended_at is None:
+                ended = self._repository.end_conversation(
+                    conversation_id=conversation.id, ended_at=self._clock()
+                )
+                assert ended is not None
+                conversation = ended
+            recovered.append(self._conversation_schema(conversation))
+        return recovered
+
     async def send_user_message(self, *, conversation_id: str, content: str) -> SendMessageResult:
-        self._require_conversation(conversation_id)
+        conversation = self._require_conversation(conversation_id)
+        if conversation.ended_at is not None:
+            raise ConversationEndedError(conversation_id)
         user_message = self._repository.add_message(
             conversation_id=conversation_id,
             role=MessageRole.USER,
@@ -162,6 +185,16 @@ class ConversationService:
             private_mode=conversation.private_mode,
             started_at=decode_dt(conversation.started_at),
             ended_at=decode_dt(conversation.ended_at) if conversation.ended_at else None,
+            memory_extraction_status=MemoryExtractionStatus(
+                conversation.memory_extraction_status
+            ),
+            memory_extraction_attempts=conversation.memory_extraction_attempts,
+            memory_extraction_error=conversation.memory_extraction_error,
+            memory_extracted_at=(
+                decode_dt(conversation.memory_extracted_at)
+                if conversation.memory_extracted_at
+                else None
+            ),
             messages=[self._message_schema(message) for message in messages or []],
         )
 

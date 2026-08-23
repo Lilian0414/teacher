@@ -5,6 +5,7 @@ from companion.memory.schemas import (
     MemoryCategory,
     MemoryExtractionRequest,
 )
+from companion.providers.errors import LLMProviderError
 from companion.providers.schemas import (
     ChatRequest,
     ChatResponse,
@@ -23,6 +24,7 @@ class RecordingLLMProvider:
         self.memory_extraction_requests: list[MemoryExtractionRequest] = []
         self.memory_candidates: list[MemoryCandidate] = []
         self.memory_analysis = MemoryAnalysis(category=MemoryCategory.OTHER, confidence=1.0)
+        self.memory_extraction_error: LLMProviderError | None = None
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.chat_requests.append(request)
@@ -69,4 +71,6 @@ class RecordingLLMProvider:
         request: MemoryExtractionRequest,
     ) -> list[MemoryCandidate]:
         self.memory_extraction_requests.append(request)
+        if self.memory_extraction_error is not None:
+            raise self.memory_extraction_error
         return list(self.memory_candidates)

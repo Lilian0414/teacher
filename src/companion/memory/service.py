@@ -94,12 +94,18 @@ class MemoryService:
         conversation = self._conversation_repository.get_conversation(conversation_id)
         if conversation is None:
             raise MemoryNotFoundError(f"Conversation not found: {conversation_id}")
+        if conversation.memory_extraction_status == "completed":
+            return MemoryExtractionResult(conversation_id=conversation_id)
+        self._conversation_repository.start_extraction(conversation)
         messages = [
             MemoryExtractionMessage(id=message.id, role=message.role, content=message.content)
             for message in self._conversation_repository.list_messages(conversation_id)
             if message.role == MessageRole.USER.value
         ]
         if not messages:
+            self._conversation_repository.finish_extraction(
+                conversation, completed_at=self._clock(), error=None
+            )
             return MemoryExtractionResult(conversation_id=conversation_id)
         existing: list[ExistingMemory] = []
         for memory in self._repository.list_memories(limit=50):
@@ -120,6 +126,9 @@ class MemoryService:
         try:
             candidates = await self._llm_provider.extract_memory_candidates(request)
         except LLMProviderError as exc:
+            self._conversation_repository.finish_extraction(
+                conversation, completed_at=self._clock(), error=str(exc)
+            )
             return MemoryExtractionResult(conversation_id=conversation_id, error=str(exc))
 
         valid_source_ids = {message.id for message in messages}
@@ -141,6 +150,9 @@ class MemoryService:
                 result.created.append(schema)
             else:
                 result.updated.append(schema)
+        self._conversation_repository.finish_extraction(
+            conversation, completed_at=self._clock(), error=None
+        )
         return result
 
     def _store_candidate(
