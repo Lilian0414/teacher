@@ -1,6 +1,8 @@
 # AI Learning Companion
 
-Mac-only M3 implementation for the AI English learning companion.
+Mac-only AI English learning companion implemented through M4 in-app proactive practice.
+
+The canonical M0–M4 capability matrix is in [`doc/PROJECT_OVERVIEW.md`](doc/PROJECT_OVERVIEW.md).
 
 ## Implemented
 
@@ -69,11 +71,12 @@ restart needs no persisted cursor: answered items retain their schedule, while a
 remains due. Learning prompts, accepted answers and attempt history live only in the learning
 tables and are never inserted into long-term life memory.
 
-## Not Implemented In M3
+## Current boundaries
 
-Private conversations, memory sensitivity levels, candidate approval, audit history, conflict
-states, memory editing, proactive-use permissions, proactive invitations and background reminders,
-voice, hardware, webcam, and file tools are future work. LangChain, Mem0, and Letta are
+M4 proactive practice is limited to invitations inside the running Textual UI. Private
+conversations, memory sensitivity levels, candidate approval, audit history, conflict states,
+memory editing, proactive-use permissions, closed-app/background notifications, voice, hardware,
+webcam, and file tools remain future work. LangChain, Mem0, and Letta are
 intentionally outside the current architecture.
 
 ## Setup and run (Apple Silicon)
@@ -84,7 +87,8 @@ required. From a fresh clone:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
 alembic upgrade head
 companion
 ```
@@ -128,11 +132,27 @@ Embeddings are disabled by default. The embedding endpoint is OpenAI-compatible 
 local server such as Ollama; model identity and exact dimensions are stored with every vector so
 incompatible vectors are never compared silently.
 
-## Validate
+## Reproducible dependencies and validation
+
+[`requirements.lock`](requirements.lock) pins application and development dependencies for Python 3.12. Install exactly
+that environment and run the same checks as CI with:
 
 ```bash
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
 ruff check .
 mypy .
 pytest
-python -m build
 ```
+
+Ordinary tests keep embeddings disabled and live Groq coverage opt-in, so these commands require no
+API credentials. Maintainers refresh the lock deliberately after reviewing dependency updates:
+
+```bash
+python -m pip install --upgrade -e ".[dev]"
+python -m pip freeze --exclude-editable | sed '/^pip==/d' > requirements.lock
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+Commit `pyproject.toml` and `requirements.lock` together after the complete validation suite passes.

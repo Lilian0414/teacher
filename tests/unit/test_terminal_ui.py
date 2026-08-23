@@ -186,7 +186,9 @@ def test_startup_message_shows_provider_without_api_key() -> None:
         }
     )
 
-    assert rendered == "[system] M1 UI ready. LLM: groq/test-model/key_present_unverified."
+    assert rendered == (
+        "[system] Companion UI ready. LLM: groq/test-model/key_present_unverified."
+    )
     assert "API" not in rendered
 
 

@@ -35,4 +35,5 @@ relevant active memories 分開標示後交給 provider。
 
 ## 不在 M3 範圍
 
-M3 不包含背景排程、主動提醒、勿擾時段、拒絕冷卻、語音輸入輸出、硬體或檔案工具。
+M3 本身不包含主動邀請；這由 M4 的程式內 polling 與 persisted cooldown 提供。關閉程式
+後的背景提醒、語音輸入輸出、硬體或檔案工具仍未實作。

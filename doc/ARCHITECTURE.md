@@ -1,4 +1,4 @@
-# Mac M0–M3 共用架構
+# Mac M0–M4 共用架構
 
 ## 技術棧
 
@@ -19,10 +19,6 @@
 
 ```text
 Textual UI
-
-M4 proactive checks cross the UI/Core boundary only through HTTP. Core owns deterministic
-eligibility and persistence; Textual owns only transient idle/presentability state and rendering.
-No polling or invitation acceptance path calls the LLM.
     │ HTTP
     ▼
 FastAPI Companion Core
@@ -30,13 +26,16 @@ FastAPI Companion Core
     ├── Conversation Service
     ├── Memory Service / Context Builder
     ├── Learning Service / Context Builder
+    ├── Proactive Service / Repository
     ├── LLM Provider
     └── SQLite repositories
 ```
 
 - UI 只透過 HTTP 呼叫 Core，不直接存取資料庫或 LLM。
-- command 名稱、availability、記憶來源驗證、刪除確認與 recall limit 都由
-  learning grading、review scheduling 與 recall limit 都由 deterministic code 控制。
+- command 名稱、availability、記憶來源驗證、刪除確認、learning grading、review
+  scheduling、proactive eligibility 與 recall limits 都由 deterministic code 控制。
+- M4 proactive check 只經 HTTP 跨越 UI/Core boundary。Core 管 eligibility 與 persistence；
+  Textual 只管 transient idle/presentability state 與 rendering。Polling 與接受邀請不呼叫 LLM。
 - 外部 LLM 位於 provider interface 後方。
 - 自動測試使用 fake provider；Groq 只允許在明確 opt-in 的 live tests 中使用。
 - provider error 是受控錯誤，不得冒充 assistant message。
@@ -51,7 +50,9 @@ teacher/
 │   ├── ARCHITECTURE.md
 │   ├── M0_FOUNDATION.md
 │   ├── M1_TEXT_CHAT.md
-│   └── M2_MEMORY.md
+│   ├── M2_MEMORY.md
+│   ├── M3_LEARNING.md
+│   └── M4_PROACTIVE.md
 ├── openspec/
 ├── migrations/
 ├── src/companion/
@@ -65,7 +66,7 @@ teacher/
 │   ├── schemas/
 │   ├── settings.py
 │   └── main.py
-├── terminal_ui/
+├── src/terminal_ui/
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -73,7 +74,8 @@ teacher/
 └── data/
 ```
 
-`learning/` 是已完成的 M3；`proactive/` 仍沒有已完成行為，其存在不代表 M4 已實作。
+`learning/` 是已完成的 M3；`proactive/` 與 Textual invitation card 是已完成但僅限程式內
+運作的 M4。它們不代表背景 daemon、關閉程式後通知或 macOS notification 已實作。
 
 ## 安全與品質規則
 
