@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, cast
 
@@ -95,6 +96,8 @@ class CompanionTerminal(App[None]):
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
         self._active_review_item_id: str | None = None
+        self._active_review_position = 1
+        self._active_review_total = 1
         self._waiting = False
         self._mode = InteractionMode.NORMAL
         self._pending_help_content: str | None = None
@@ -265,11 +268,13 @@ class CompanionTerminal(App[None]):
         self._after_mode_change()
         self._focus_input()
 
-    def _enter_review(self, item_id: str) -> None:
+    def _enter_review(self, item_id: str, *, position: int = 1, total: int = 1) -> None:
         if not item_id:
             raise ValueError("Review item ID is required")
         self._mode = InteractionMode.REVIEW
         self._active_review_item_id = item_id
+        self._active_review_position = position
+        self._active_review_total = total
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "Answer the review question..."
@@ -412,7 +417,11 @@ class CompanionTerminal(App[None]):
             return
         question = payload.get("review_question")
         if isinstance(question, dict):
-            self._enter_review(str(question["id"]))
+            self._enter_review(
+                str(question["id"]),
+                position=int(question.get("position", 1)),
+                total=int(question.get("total", 1)),
+            )
             self._messages.write(self._format_review_question(question))
         elif payload.get("review_complete"):
             self._messages.write("No items are due. Review complete.")
@@ -457,7 +466,11 @@ class CompanionTerminal(App[None]):
         if command == "review" and result.get("ok"):
             question = result.get("review_question")
             if isinstance(question, dict):
-                self._enter_review(str(question["id"]))
+                self._enter_review(
+                    str(question["id"]),
+                    position=int(question.get("position", 1)),
+                    total=int(question.get("total", 1)),
+                )
             else:
                 self._reset_to_normal()
         elif command == "review_quit" and result.get("ok"):
@@ -469,7 +482,11 @@ class CompanionTerminal(App[None]):
             return
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",
-            json={"answer": answer},
+            json={
+                "answer": answer,
+                "position": self._active_review_position,
+                "total": self._active_review_total,
+            },
         )
         response.raise_for_status()
         payload = cast(dict[str, Any], response.json())
@@ -479,7 +496,11 @@ class CompanionTerminal(App[None]):
         self._messages.write(self._format_review_result(result))
         next_question = result.get("next_question")
         if isinstance(next_question, dict):
-            self._enter_review(str(next_question["id"]))
+            self._enter_review(
+                str(next_question["id"]),
+                position=int(next_question.get("position", 1)),
+                total=int(next_question.get("total", 1)),
+            )
         else:
             self._reset_to_normal()
 
@@ -652,7 +673,8 @@ class CompanionTerminal(App[None]):
     @staticmethod
     def _format_review_question(question: dict[str, Any]) -> str:
         return (
-            f"Review item {question.get('position', 1)}\n"
+            f"Review item {question.get('position', 1)} of {question.get('total', 1)} "
+            f"({question.get('remaining', 1)} remaining)\n"
             f"{question.get('prompt')} ({question.get('kind')})"
         )
 
@@ -661,8 +683,11 @@ class CompanionTerminal(App[None]):
         verdict = "Correct" if result.get("correct") else "Incorrect"
         accepted = " / ".join(str(value) for value in result.get("accepted_answers") or [])
         lines = [
-            f"{verdict}. Accepted: {accepted}",
-            f"Next review: {result.get('next_review_at')}",
+            f"{verdict}.",
+            f"Prompt: {result.get('prompt')}",
+            f"Your answer: {result.get('submitted_answer')}",
+            f"Accepted answer(s): {accepted}",
+            f"Next review: {CompanionTerminal._format_review_time(result.get('next_review_at'))}",
         ]
         next_question = result.get("next_question")
         if isinstance(next_question, dict):
@@ -670,6 +695,16 @@ class CompanionTerminal(App[None]):
         else:
             lines.append("Complete.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_review_time(value: object) -> str:
+        if not isinstance(value, str):
+            return "scheduled"
+        try:
+            review_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        return review_at.astimezone().strftime("%a, %b %-d at %-I:%M %p")
 
     @staticmethod
     def _format_memory(memory: dict[str, Any]) -> str:

@@ -26,14 +26,20 @@ class ReviewQuestion(BaseModel):
     prompt: str
     kind: LearningKind
     position: int = 1
+    total: int = 1
+    remaining: int = 1
 
 
 class ReviewAnswerRequest(BaseModel):
     answer: str = Field(min_length=1)
+    position: int = Field(default=1, ge=1)
+    total: int = Field(default=1, ge=1)
 
 
 class ReviewResult(BaseModel):
     correct: bool
+    prompt: str
+    submitted_answer: str
     accepted_answers: list[str]
     stage: int
     next_review_at: datetime
