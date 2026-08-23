@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -180,12 +181,12 @@ def test_startup_message_shows_provider_without_api_key() -> None:
             "llm": {
                 "provider": "groq",
                 "model": "test-model",
-                "status": "configured",
+                "status": "key_present_unverified",
             }
         }
     )
 
-    assert rendered == "[system] M1 UI ready. LLM: groq/test-model/configured."
+    assert rendered == "[system] M1 UI ready. LLM: groq/test-model/key_present_unverified."
     assert "API" not in rendered
 
 
@@ -668,3 +669,14 @@ async def test_review_owns_input_and_blocks_help_or_hint_entry_points() -> None:
     assert_mode(terminal, InteractionMode.NORMAL)
     assert terminal._active_review_item_id is None
     await terminal._client.aclose()
+
+
+def test_terminal_uses_configured_core_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COMPANION_PORT", "9123")
+    from companion.settings import get_settings
+
+    get_settings.cache_clear()
+    terminal = CompanionTerminal()
+    assert terminal._core_url == "http://127.0.0.1:9123"
+    asyncio.run(terminal._client.aclose())
+    get_settings.cache_clear()

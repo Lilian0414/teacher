@@ -10,6 +10,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Static
 
+from companion.settings import get_settings
+
 
 class InteractionMode(StrEnum):
     """Tracks where the terminal is within the intent-based interaction flow.
@@ -65,9 +67,9 @@ class CompanionTerminal(App[None]):
         ("escape", "cancel_intent", "Try myself"),
     ]
 
-    def __init__(self, core_url: str = "http://127.0.0.1:8000") -> None:
+    def __init__(self, core_url: str | None = None) -> None:
         super().__init__()
-        self._core_url = core_url.rstrip("/")
+        self._core_url = (core_url or get_settings().core_url).rstrip("/")
         self._client = httpx.AsyncClient(
             base_url=self._core_url,
             timeout=40.0,
@@ -733,5 +735,10 @@ async def main() -> None:
     await app.run_async()
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Run the installed terminal UI console entry point."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

@@ -17,6 +17,8 @@ def make_engine(database_url: str | None = None) -> Engine:
     url = database_url or get_settings().database_url
     if url.startswith("sqlite:///"):
         sqlite_path = Path(url.removeprefix("sqlite:///"))
+        if not sqlite_path.is_absolute() and sqlite_path != Path(":memory:"):
+            raise ValueError("SQLite database paths must be absolute; set COMPANION_DATABASE_URL")
         if sqlite_path.parent != Path("."):
             sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}

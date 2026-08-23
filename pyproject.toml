@@ -15,6 +15,11 @@ dependencies = [
   "uvicorn[standard]>=0.30,<1.0",
 ]
 
+[project.scripts]
+companion-core = "companion.cli:core"
+companion-ui = "terminal_ui.app:run"
+companion = "companion.cli:local"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.11,<2.0",
