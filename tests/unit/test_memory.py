@@ -27,6 +27,14 @@ class DeterministicEmbeddingProvider:
         self._vectors = vectors
         self._fail_for = fail_for or set()
 
+    @property
+    def model(self) -> str:
+        return "deterministic-v1"
+
+    @property
+    def dimensions(self) -> int:
+        return 2
+
     def embed(self, text: str) -> list[float]:
         if text in self._fail_for:
             raise RuntimeError("embedding provider unavailable")

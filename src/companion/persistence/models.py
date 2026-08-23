@@ -65,6 +65,8 @@ class Memory(Base):
     category: Mapped[str] = mapped_column(String(32), index=True)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    embedding_dimensions: Mapped[int | None] = mapped_column(nullable=True)
     person_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("people.id"),
