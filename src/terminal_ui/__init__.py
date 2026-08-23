@@ -1,1 +1,1 @@
-"""Minimal Textual UI for M0."""
+"""Textual UI for the AI learning companion."""

@@ -720,14 +720,14 @@ class CompanionTerminal(App[None]):
     @staticmethod
     def _startup_message(payload: dict[str, Any] | None) -> str:
         if payload is None:
-            return "[system] M1 UI ready. Core unavailable."
+            return "[system] Companion UI ready. Core unavailable."
         llm = payload.get("llm")
         if not isinstance(llm, dict):
-            return "[system] M1 UI ready. LLM status unavailable."
+            return "[system] Companion UI ready. LLM status unavailable."
         provider = llm.get("provider", "unknown")
         model = llm.get("model") or "-"
         status = llm.get("status", "unavailable")
-        return f"[system] M1 UI ready. LLM: {provider}/{model}/{status}."
+        return f"[system] Companion UI ready. LLM: {provider}/{model}/{status}."
 
 
 async def main() -> None:

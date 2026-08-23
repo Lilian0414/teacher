@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LLM_PROVIDER: fake
+      RUN_LIVE_API_TESTS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+      - name: Ruff
+        run: ruff check .
+      - name: Strict mypy
+        run: mypy .
+      - name: Tests
+        run: pytest
+      - name: SQLite migration round trip
+        env:
+          COMPANION_DATABASE_URL: sqlite:////tmp/teacher-ci.sqlite3
+        run: |
+          rm -f /tmp/teacher-ci.sqlite3
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head

@@ -2,7 +2,7 @@ schema: spec-driven
 
 context: |
   Project: Mac-first AI English learning companion.
-  Current baseline: M0 foundation, M1 text chat, and simplified M2 long-term memory.
+  Current baseline: M0 foundation through M4 in-app proactive practice.
   Stack: Python 3.12, FastAPI, Textual, SQLite, SQLAlchemy 2, Alembic, Pydantic v2.
   Quality gates: Ruff, strict mypy, pytest.
   Automated tests must use FakeLLMProvider. Groq is only used in opt-in live tests.

@@ -1,4 +1,4 @@
-"""Proactive package reserved for M4."""
+"""Deterministic M4 in-app proactive practice."""
 from companion.proactive.errors import InvitationConflictError, InvitationNotFoundError
 from companion.proactive.repository import ProactiveRepository
 from companion.proactive.schemas import (

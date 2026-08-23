@@ -62,4 +62,4 @@ provider 模組，route handler 不保存秘密。
 - timeout、authentication、rate limit、暫時性錯誤與無效回覆。
 - M0 commands 無 regression。
 
-長期記憶屬於 M2；學習複習、scheduler、主動邀請與語音仍是後續工作。
+長期記憶、學習複習與程式內主動邀請分別由後續 M2、M3、M4 交付；語音仍未實作。
