@@ -14,7 +14,11 @@ from companion.api.schemas import (
 )
 from companion.availability import AvailabilityService, OverrideRequest
 from companion.commands.parser import AVAILABLE_COMMANDS, CommandParser
-from companion.conversation import ConversationNotFoundError, ConversationService
+from companion.conversation import (
+    ConversationEndedError,
+    ConversationNotFoundError,
+    ConversationService,
+)
 from companion.learning import (
     LearningItemNotDueError,
     LearningItemNotFoundError,
@@ -280,7 +284,10 @@ async def execute_command(
 @router.post("/v1/conversations")
 async def create_conversation(
     conversation_service: ConversationService = ConversationDependency,
+    memory_service: MemoryService = MemoryDependency,
 ) -> CreateConversationResponse:
+    for recoverable in conversation_service.recover_interrupted_conversations():
+        await memory_service.extract_conversation(recoverable.id)
     conversation = conversation_service.create_conversation()
     return CreateConversationResponse(
         id=conversation.id,
@@ -317,6 +324,8 @@ async def send_message(
         )
     except ConversationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ConversationEndedError as exc:
+        raise HTTPException(status_code=409, detail="Conversation has ended") from exc
     return SendMessageResponse(
         ok=result.error is None,
         user_message=result.user_message,
@@ -336,7 +345,7 @@ async def end_conversation(
         conversation = conversation_service.end_conversation(conversation_id)
         extraction = await memory_service.extract_conversation(conversation_id)
         return ConversationResponse(
-            conversation=conversation,
+            conversation=conversation_service.get_conversation(conversation.id),
             memory_extraction=extraction,
         )
     except ConversationNotFoundError as exc:

@@ -17,6 +17,7 @@ from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryServi
 from companion.memory.schemas import MemoryAnalysis, MemoryCandidate, MemoryCategory
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
+from companion.providers.errors import LLMTemporaryError
 from tests.support import RecordingLLMProvider
 
 
@@ -131,8 +132,63 @@ def test_conversation_end_extracts_memory_and_repeated_fact_does_not_duplicate()
         second_end = client.post(f"/v1/conversations/{conversation['id']}/end").json()
 
     assert len(first_end["memory_extraction"]["created"]) == 1
-    assert len(second_end["memory_extraction"]["updated"]) == 1
+    assert second_end["memory_extraction"]["created"] == []
+    assert len(provider.memory_extraction_requests) == 1
+    assert second_end["conversation"]["memory_extraction_status"] == "completed"
+    assert second_end["conversation"]["memory_extraction_attempts"] == 1
     assert len(repository.list_memories()) == 1
+
+
+def test_ended_conversation_rejects_messages_with_conflict() -> None:
+    client, _, _ = make_m2_client()
+
+    with client:
+        conversation = client.post("/v1/conversations").json()
+        client.post(f"/v1/conversations/{conversation['id']}/end")
+        response = client.post(
+            f"/v1/conversations/{conversation['id']}/messages",
+            json={"content": "Too late"},
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Conversation has ended"}
+
+
+def test_failed_extraction_preserves_end_and_retries_deterministically() -> None:
+    client, provider, _ = make_m2_client()
+
+    with client:
+        conversation = client.post("/v1/conversations").json()
+        client.post(
+            f"/v1/conversations/{conversation['id']}/messages",
+            json={"content": "Remember this important fact."},
+        )
+        provider.memory_extraction_error = LLMTemporaryError("provider offline")
+        failed = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+        provider.memory_extraction_error = None
+        retried = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+
+    assert failed["conversation"]["ended_at"] is not None
+    assert failed["memory_extraction"]["error"] == "provider offline"
+    assert retried["conversation"]["memory_extraction_status"] == "completed"
+    assert retried["conversation"]["memory_extraction_attempts"] == 2
+
+
+def test_new_conversation_recovers_interrupted_session() -> None:
+    client, provider, _ = make_m2_client()
+
+    with client:
+        interrupted = client.post("/v1/conversations").json()
+        client.post(
+            f"/v1/conversations/{interrupted['id']}/messages",
+            json={"content": "A recoverable session fact."},
+        )
+        client.post("/v1/conversations")
+        recovered = client.get(f"/v1/conversations/{interrupted['id']}").json()
+
+    assert recovered["conversation"]["ended_at"] is not None
+    assert recovered["conversation"]["memory_extraction_status"] == "completed"
+    assert len(provider.memory_extraction_requests) == 1
 
 
 def test_new_conversation_receives_relevant_memory_context() -> None:

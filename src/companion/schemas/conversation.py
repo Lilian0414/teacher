@@ -10,6 +10,13 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
 
 
+class MemoryExtractionStatus(StrEnum):
+    NOT_STARTED = "not_started"
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class MessageSchema(BaseModel):
     id: str
     conversation_id: str
@@ -27,4 +34,8 @@ class ConversationSchema(BaseModel):
     private_mode: bool
     started_at: datetime
     ended_at: datetime | None
+    memory_extraction_status: MemoryExtractionStatus
+    memory_extraction_attempts: int
+    memory_extraction_error: str | None
+    memory_extracted_at: datetime | None
     messages: list[MessageSchema] = []

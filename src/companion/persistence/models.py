@@ -24,6 +24,10 @@ class Conversation(Base):
     private_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     started_at: Mapped[str] = mapped_column(String(40), index=True)
     ended_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    memory_extraction_status: Mapped[str] = mapped_column(String(16), default="not_started")
+    memory_extraction_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    memory_extraction_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memory_extracted_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 
 class Message(Base):
