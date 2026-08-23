@@ -65,12 +65,15 @@ class MemoryRepository:
         confidence: float | None,
         now: datetime,
         embedding: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> Memory:
         memory = Memory(
             id=str(uuid4()),
             category=category.value,
             content=content.strip(),
             embedding=self.encode_embedding(embedding),
+            embedding_model=embedding_model if embedding is not None else None,
+            embedding_dimensions=len(embedding) if embedding is not None else None,
             person_id=person_id,
             source_conversation_id=source_conversation_id,
             confidence=confidence,
@@ -148,11 +151,14 @@ class MemoryRepository:
         confidence: float | None,
         now: datetime,
         embedding: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> Memory:
         if content is not None:
             memory.content = content.strip()
         if content is not None or embedding is not None:
             memory.embedding = self.encode_embedding(embedding)
+            memory.embedding_model = embedding_model if embedding is not None else None
+            memory.embedding_dimensions = len(embedding) if embedding is not None else None
         if category is not None:
             memory.category = category.value
         if person_id is not None:
@@ -166,6 +172,12 @@ class MemoryRepository:
         self._session.commit()
         self._session.refresh(memory)
         return memory
+
+    def set_embedding(self, memory: Memory, embedding: list[float], *, model: str) -> None:
+        memory.embedding = self.encode_embedding(embedding)
+        memory.embedding_model = model
+        memory.embedding_dimensions = len(embedding)
+        self._session.commit()
 
     def soft_delete(self, memory: Memory, *, now: datetime) -> Memory:
         memory.status = MemoryStatus.DELETED.value

@@ -66,6 +66,13 @@ class Settings(BaseSettings):
             "COMPANION_MEMORY_CONTEXT_LIMIT",
         ),
     )
+    embeddings_enabled: bool = Field(default=False)
+    embedding_base_url: str = Field(default="http://127.0.0.1:11434/v1")
+    embedding_api_key: str = Field(default="")
+    embedding_model: str = Field(default="nomic-embed-text")
+    embedding_dimensions: int = Field(default=768, ge=1)
+    embedding_timeout_seconds: float = Field(default=10, gt=0)
+    embedding_backfill_limit: int = Field(default=10, ge=0, le=100)
     learning_context_limit: int = Field(
         default=3,
         ge=1,

@@ -24,7 +24,8 @@ def test_m3_migration_upgrades_and_downgrades(tmp_path: Path) -> None:
     )
     inspector = inspect(make_engine(f"sqlite:///{database_path}"))
     assert {"learning_items", "learning_attempts"} <= set(inspector.get_table_names())
-    assert "embedding" in {column["name"] for column in inspector.get_columns("memories")}
+    memory_columns = {column["name"] for column in inspector.get_columns("memories")}
+    assert {"embedding", "embedding_model", "embedding_dimensions"} <= memory_columns
 
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "20260719_0003"],

@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from functools import lru_cache
 
 from sqlalchemy.orm import Session
 
@@ -9,7 +10,13 @@ from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryServi
 from companion.persistence.database import get_session
 from companion.persistence.repositories import AvailabilityRepository
 from companion.proactive import ProactiveRepository, ProactiveService
-from companion.providers import FakeLLMProvider, GroqLLMProvider, LLMProvider
+from companion.providers import (
+    EmbeddingProvider,
+    FakeLLMProvider,
+    GroqLLMProvider,
+    LLMProvider,
+    OpenAIEmbeddingProvider,
+)
 from companion.providers.errors import LLMConfigurationError
 from companion.schemas.availability import LLMStatus
 from companion.settings import get_settings
@@ -67,8 +74,23 @@ def get_llm_provider() -> LLMProvider:
     )
 
 
+@lru_cache
+def get_embedding_provider() -> EmbeddingProvider | None:
+    settings = get_settings()
+    if not settings.embeddings_enabled:
+        return None
+    return OpenAIEmbeddingProvider(
+        base_url=settings.embedding_base_url,
+        api_key=settings.embedding_api_key,
+        model=settings.embedding_model,
+        dimensions=settings.embedding_dimensions,
+        timeout_seconds=settings.embedding_timeout_seconds,
+    )
+
+
 def get_conversation_service() -> Generator[ConversationService, None, None]:
     provider = get_llm_provider()
+    embedding_provider = get_embedding_provider()
     for session in get_session():
         settings = get_settings()
         memory_repository = MemoryRepository(session)
@@ -80,6 +102,8 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
             memory_context_builder=MemoryContextBuilder(
                 memory_repository,
                 limit=settings.memory_context_limit,
+                embedding_provider=embedding_provider,
+                backfill_limit=settings.embedding_backfill_limit,
             ),
             learning_context_builder=LearningContextBuilder(
                 LearningRepository(session),
@@ -91,11 +115,13 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
 
 def get_memory_service() -> Generator[MemoryService, None, None]:
     provider = get_llm_provider()
+    embedding_provider = get_embedding_provider()
     for session in get_session():
         yield MemoryService(
             repository=MemoryRepository(session),
             conversation_repository=ConversationRepository(session),
             llm_provider=provider,
+            embedding_provider=embedding_provider,
         )
 
 

@@ -206,6 +206,7 @@ class MemoryService:
                         confidence=confidence,
                         now=now,
                         embedding=embedding,
+                        embedding_model=self._embedding_model(embedding),
                     ),
                     False,
                 )
@@ -225,6 +226,7 @@ class MemoryService:
                     confidence=confidence,
                     now=now,
                     embedding=embedding,
+                    embedding_model=self._embedding_model(embedding),
                 ),
                 False,
             )
@@ -237,6 +239,7 @@ class MemoryService:
                 confidence=confidence,
                 now=now,
                 embedding=embedding,
+                embedding_model=self._embedding_model(embedding),
             ),
             True,
         )
@@ -245,11 +248,19 @@ class MemoryService:
         if self._embedding_provider is None:
             return None
         try:
-            return normalize_embedding(self._embedding_provider.embed(text))
+            embedding = normalize_embedding(self._embedding_provider.embed(text))
+            if embedding is None or len(embedding) != self._embedding_provider.dimensions:
+                return None
+            return embedding
         except Exception:
             # Storing the memory remains more important than optional semantic
             # metadata when the embedding provider is unavailable.
             return None
+
+    def _embedding_model(self, embedding: list[float] | None) -> str | None:
+        if embedding is None or self._embedding_provider is None:
+            return None
+        return self._embedding_provider.model
 
 
 def _is_trivial_message(content: str) -> bool:

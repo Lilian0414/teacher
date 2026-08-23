@@ -22,7 +22,8 @@ Mac-only M3 implementation for the AI English learning companion.
 - Memory statuses are limited to `active` and soft-deleted `deleted`.
 - Conversation-end extraction considers only persisted user messages and applies deterministic
   source, trivial-content, and exact-duplicate checks before storage.
-- Relevant-memory recall adds at most five matching memories to normal chat context.
+- Relevant-memory recall adds at most five matching memories to normal chat context. Optional
+  OpenAI-compatible embeddings enable hybrid semantic recall in the production runtime.
 - Memory management commands: `/remember`, `/memories`, and confirmed `/forget`.
 - `/help` and `/hint` create deduplicated learning items; `/say` never does.
 - `/review` starts a resumable, one-question-at-a-time terminal review session.
@@ -49,8 +50,11 @@ Mac-only M3 implementation for the AI English learning companion.
 Only user messages are sent to memory extraction. Greetings, assistant messages, candidates
 with invalid source IDs, and exact duplicates are rejected by deterministic Core policy.
 Deleted memories remain in SQLite with `status=deleted` but are excluded from recall and normal
-listing. Chat recall searches by names and text overlap and sends at most five relevant entries
-to the configured LLM; it never sends the complete memory database.
+listing. Chat recall always retains name/text matching and sends at most five relevant entries to
+the configured LLM; it never sends the complete memory database. When embeddings are enabled,
+new and updated memories are embedded and query recall uses compatible vectors. Older or
+incompatible rows are lazily re-embedded, bounded by `EMBEDDING_BACKFILL_LIMIT` per query.
+Provider errors fall back to lexical/person matching.
 
 ## Learning Review
 
@@ -108,11 +112,21 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_TIMEOUT_SECONDS=30
 MEMORY_CONTEXT_LIMIT=5
 LEARNING_CONTEXT_LIMIT=3
+EMBEDDINGS_ENABLED=false
+EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_DIMENSIONS=768
+EMBEDDING_TIMEOUT_SECONDS=10
+EMBEDDING_BACKFILL_LIMIT=10
 ```
 
 Keep real `GROQ_API_KEY` values in `.env` or the shell environment only. `/v1/state` reports a
 present key as `key_present_unverified` until an actual request proves the configured model is
 usable. Provider/model failures include the model and Groq's safe error detail, never the key.
+Embeddings are disabled by default. The embedding endpoint is OpenAI-compatible and may be a
+local server such as Ollama; model identity and exact dimensions are stored with every vector so
+incompatible vectors are never compared silently.
 
 ## Validate
 
