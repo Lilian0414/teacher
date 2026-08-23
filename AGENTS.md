@@ -13,6 +13,25 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
+## Codex implementation delivery contract
+
+For GitHub Issues explicitly delegated to Codex:
+
+- Treat the linked GitHub Issue/spec as the task-specific source of truth.
+- Start from the latest requested base branch, normally `main`, and keep changes focused to the delegated Issue.
+- Read this file and repository-local skills/instructions before editing.
+- Run the strongest applicable repository checks requested by the Issue (normally Ruff, strict mypy, pytest, migrations/packaging checks when relevant, and `git diff --check`).
+- Do not broaden scope or rewrite unrelated code.
+- Do not merge the implementation PR.
+- The **GitHub PR is the delivery boundary**. A task summary or task-local commit alone is not delivery.
+- Task/session visibility is not required as a separate workflow gate. If triggered asynchronously, continue the delegated work normally and publish/update the implementation result when possible.
+- If the environment exposes **Create PR**, leaving the completed implementation ready for that handoff is acceptable; a human may perform that publication click.
+- If publication is blocked, preserve the completed implementation and report the exact blocker. Do not redo the feature merely because push/PR creation failed.
+- When review findings are sent back, update the same implementation/PR where practical, run affected checks again, and do not merge.
+- If equivalent work has already merged and this is a delayed duplicate task, stop rather than resolving duplicate-work conflicts or reimplementing it.
+
+Implementation ownership remains with Codex for delegated Issues unless the user explicitly changes ownership. ChatGPT/planner-side review or publication delays are not permission for a second implementation writer to take over silently.
+
 ## Quick Reference
 
 ```bash
