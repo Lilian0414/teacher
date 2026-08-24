@@ -6,6 +6,10 @@ from companion.persistence.database import make_engine
 from companion.settings import Settings
 
 
+def test_default_groq_model_is_supported_replacement() -> None:
+    assert Settings().groq_model == "openai/gpt-oss-20b"
+
+
 def test_default_database_is_absolute_and_cwd_independent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

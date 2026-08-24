@@ -11,7 +11,12 @@ from companion.api.dependencies import get_availability_service, get_conversatio
 from companion.availability import AvailabilityService
 from companion.conversation import ConversationRepository, ConversationService
 from companion.main import create_app
-from companion.memory.schemas import MemoryExtractionMessage, MemoryExtractionRequest
+from companion.memory.schemas import (
+    MemoryAnalysisRequest,
+    MemoryCategory,
+    MemoryExtractionMessage,
+    MemoryExtractionRequest,
+)
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
 from companion.providers.groq import GroqLLMProvider
@@ -50,6 +55,53 @@ async def test_groq_live_chat_and_help() -> None:
 
     assert chat.content
     assert help_response.natural_expression
+
+
+@pytest.mark.asyncio
+async def test_groq_live_help_hint_and_say_contracts() -> None:
+    settings = get_settings()
+    provider = GroqLLMProvider(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
+        base_url=settings.groq_base_url,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
+
+    help_response = await provider.provide_language_help(
+        LanguageHelpRequest(mode=LanguageHelpMode.HELP, content="我今天吃了一顆蘋果")
+    )
+    hint_response = await provider.provide_language_help(
+        LanguageHelpRequest(mode=LanguageHelpMode.HINT, content="我今天吃一顆蘋果")
+    )
+    say_response = await provider.provide_language_help(
+        LanguageHelpRequest(mode=LanguageHelpMode.SAY, content="我今天很累")
+    )
+
+    assert help_response.natural_expression
+    assert not CJK_PATTERN.search(help_response.natural_expression)
+    assert help_response.notes_zh and CJK_PATTERN.search(help_response.notes_zh)
+    assert 1 <= len(hint_response.hints) <= 3
+    assert all(not CJK_PATTERN.search(hint) for hint in hint_response.hints)
+    assert say_response.natural_expression
+    assert not CJK_PATTERN.search(say_response.natural_expression)
+
+
+@pytest.mark.asyncio
+async def test_groq_live_explicit_memory_analysis_schema() -> None:
+    settings = get_settings()
+    provider = GroqLLMProvider(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
+        base_url=settings.groq_base_url,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
+
+    analysis = await provider.analyze_memory(
+        MemoryAnalysisRequest(content="Alex is my university classmate.")
+    )
+
+    assert analysis.category in MemoryCategory
+    assert analysis.confidence is None or 0 <= analysis.confidence <= 1
 
 
 @pytest.mark.asyncio
