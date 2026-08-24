@@ -540,7 +540,17 @@ class CompanionTerminal(App[None]):
     async def action_quit(self) -> None:
         if self._conversation_id is not None:
             try:
-                await self._client.post(f"/v1/conversations/{self._conversation_id}/end")
+                response = await self._client.post(
+                    f"/v1/conversations/{self._conversation_id}/end"
+                )
+                response.raise_for_status()
+                payload = response.json()
+                extraction = payload.get("memory_extraction")
+                if isinstance(extraction, dict) and extraction.get("retryable"):
+                    self._messages.write(
+                        "[system] Memory extraction failed. Quit again to retry safely."
+                    )
+                    return
             except httpx.HTTPError:
                 pass
         await self._client.aclose()

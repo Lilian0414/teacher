@@ -1,5 +1,5 @@
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -172,6 +172,76 @@ def test_failed_extraction_preserves_end_and_retries_deterministically() -> None
     assert failed["memory_extraction"]["error"] == "provider offline"
     assert retried["conversation"]["memory_extraction_status"] == "completed"
     assert retried["conversation"]["memory_extraction_attempts"] == 2
+
+
+def test_candidate_batch_is_atomic_and_failed_attempt_retries_cleanly() -> None:
+    client, provider, repository = make_m2_client()
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    hidden = repository.create_memory(
+        category=MemoryCategory.OTHER,
+        content="This memory must not be changed.",
+        person_id=None,
+        source_conversation_id=None,
+        confidence=1.0,
+        now=now - timedelta(days=1),
+    )
+    for index in range(50):
+        repository.create_memory(
+            category=MemoryCategory.OTHER,
+            content=f"Offered memory {index}.",
+            person_id=None,
+            source_conversation_id=None,
+            confidence=1.0,
+            now=now + timedelta(seconds=index),
+        )
+
+    with client:
+        conversation = client.post("/v1/conversations").json()
+        sent = client.post(
+            f"/v1/conversations/{conversation['id']}/messages",
+            json={"content": "Remember one fact, but do not rewrite a hidden memory."},
+        ).json()
+        source_id = sent["user_message"]["id"]
+        provider.memory_candidates = [
+            MemoryCandidate(
+                category=MemoryCategory.PERSONAL,
+                content="The new fact.",
+                source_message_ids=[source_id],
+            ),
+            MemoryCandidate(
+                category=MemoryCategory.OTHER,
+                content="Unauthorized rewrite.",
+                source_message_ids=[source_id],
+                updates_memory_id=hidden.id,
+            ),
+        ]
+
+        failed = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+        reloaded = client.get(f"/v1/conversations/{conversation['id']}").json()
+
+        assert failed["memory_extraction"] == {
+            "conversation_id": conversation["id"],
+            "created": [],
+            "updated": [],
+            "skipped_count": 0,
+            "error": "Memory extraction could not be saved",
+            "retryable": True,
+        }
+        assert reloaded["conversation"]["memory_extraction_status"] == "failed"
+        reloaded_hidden = repository.get_memory(hidden.id)
+        assert reloaded_hidden is not None
+        assert reloaded_hidden.content == "This memory must not be changed."
+        assert repository.list_memories(query="The new fact") == []
+
+        provider.memory_candidates = provider.memory_candidates[:1]
+        retried = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+        repeated = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+
+    assert retried["memory_extraction"]["retryable"] is False
+    assert len(retried["memory_extraction"]["created"]) == 1
+    assert repeated["memory_extraction"]["created"] == []
+    assert len(repository.list_memories(query="The new fact")) == 1
+    assert len(provider.memory_extraction_requests) == 2
 
 
 def test_new_conversation_recovers_interrupted_session() -> None:
