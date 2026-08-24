@@ -37,7 +37,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GROQ_API_KEY", "COMPANION_GROQ_API_KEY"),
     )
     groq_model: str = Field(
-        default="llama-3.1-8b-instant",
+        default="openai/gpt-oss-20b",
         validation_alias=AliasChoices("GROQ_MODEL", "COMPANION_GROQ_MODEL"),
     )
     groq_base_url: str = Field(

@@ -111,7 +111,7 @@ current directory. Override it with an absolute URL such as
 ```env
 LLM_PROVIDER=groq
 GROQ_API_KEY=
-GROQ_MODEL=llama-3.1-8b-instant
+GROQ_MODEL=openai/gpt-oss-20b
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_TIMEOUT_SECONDS=30
 MEMORY_CONTEXT_LIMIT=5
