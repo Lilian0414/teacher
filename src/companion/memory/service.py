@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
 from companion.memory.context import memory_to_schema
-from companion.memory.errors import MemoryNotFoundError, MemoryValidationError
+from companion.memory.errors import MemoryError, MemoryNotFoundError, MemoryValidationError
 from companion.memory.repository import MemoryRepository
 from companion.memory.schemas import (
     ExistingMemory,
@@ -123,37 +125,56 @@ class MemoryService:
             messages=messages,
             existing_memories=existing,
         )
+        offered_memory_ids = {memory.id for memory in existing}
         try:
             candidates = await self._llm_provider.extract_memory_candidates(request)
         except LLMProviderError as exc:
             self._conversation_repository.finish_extraction(
                 conversation, completed_at=self._clock(), error=str(exc)
             )
-            return MemoryExtractionResult(conversation_id=conversation_id, error=str(exc))
+            return MemoryExtractionResult(
+                conversation_id=conversation_id, error=str(exc), retryable=True
+            )
 
         valid_source_ids = {message.id for message in messages}
         source_messages = {message.id: message for message in messages}
         result = MemoryExtractionResult(conversation_id=conversation_id)
-        for candidate in candidates:
-            if not set(candidate.source_message_ids).issubset(valid_source_ids):
-                result.skipped_count += 1
-                continue
-            candidate_sources = [
-                source_messages[source_id].content for source_id in candidate.source_message_ids
-            ]
-            if all(_is_trivial_message(content) for content in candidate_sources):
-                result.skipped_count += 1
-                continue
-            stored, created = self._store_candidate(candidate, conversation_id)
-            schema = memory_to_schema(stored, self._repository)
-            if created:
-                result.created.append(schema)
-            else:
-                result.updated.append(schema)
-        self._conversation_repository.finish_extraction(
-            conversation, completed_at=self._clock(), error=None
-        )
-        return result
+        try:
+            for candidate in candidates:
+                if not set(candidate.source_message_ids).issubset(valid_source_ids):
+                    result.skipped_count += 1
+                    continue
+                candidate_sources = [
+                    source_messages[source_id].content for source_id in candidate.source_message_ids
+                ]
+                if all(_is_trivial_message(content) for content in candidate_sources):
+                    result.skipped_count += 1
+                    continue
+                if (
+                    candidate.updates_memory_id is not None
+                    and candidate.updates_memory_id not in offered_memory_ids
+                ):
+                    raise MemoryValidationError("Memory update target was not offered")
+                stored, created = self._store_candidate(candidate, conversation_id)
+                schema = memory_to_schema(stored, self._repository)
+                if created:
+                    result.created.append(schema)
+                else:
+                    result.updated.append(schema)
+            self._conversation_repository.finish_extraction(
+                conversation, completed_at=self._clock(), error=None, commit=False
+            )
+            self._repository.commit()
+            return result
+        except (MemoryError, SQLAlchemyError, ValueError):
+            self._repository.rollback()
+            error = "Memory extraction could not be saved"
+            self._conversation_repository.finish_extraction(
+                conversation, completed_at=self._clock(), error=error
+            )
+            return MemoryExtractionResult(
+                conversation_id=conversation_id, error=error, retryable=True
+            )
 
     def _store_candidate(
         self,
@@ -192,6 +213,7 @@ class MemoryService:
                 aliases=aliases,
                 relationship_to_user=relationship_to_user,
                 now=now,
+                commit=source_conversation_id is None,
             )
         if updates_memory_id:
             existing = self._repository.get_memory(updates_memory_id)
@@ -207,6 +229,7 @@ class MemoryService:
                         now=now,
                         embedding=embedding,
                         embedding_model=self._embedding_model(embedding),
+                        commit=source_conversation_id is None,
                     ),
                     False,
                 )
@@ -227,6 +250,7 @@ class MemoryService:
                     now=now,
                     embedding=embedding,
                     embedding_model=self._embedding_model(embedding),
+                    commit=source_conversation_id is None,
                 ),
                 False,
             )
@@ -240,6 +264,7 @@ class MemoryService:
                 now=now,
                 embedding=embedding,
                 embedding_model=self._embedding_model(embedding),
+                commit=source_conversation_id is None,
             ),
             True,
         )

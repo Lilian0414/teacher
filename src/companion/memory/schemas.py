@@ -86,3 +86,4 @@ class MemoryExtractionResult(BaseModel):
     updated: list[MemorySchema] = Field(default_factory=list)
     skipped_count: int = 0
     error: str | None = None
+    retryable: bool = False

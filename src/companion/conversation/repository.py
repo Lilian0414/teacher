@@ -71,12 +71,16 @@ class ConversationRepository:
         *,
         completed_at: datetime,
         error: str | None,
+        commit: bool = True,
     ) -> Conversation:
         conversation.memory_extraction_status = "failed" if error else "completed"
         conversation.memory_extraction_error = error
         conversation.memory_extracted_at = None if error else encode_dt(completed_at)
-        self._session.commit()
-        self._session.refresh(conversation)
+        if commit:
+            self._session.commit()
+            self._session.refresh(conversation)
+        else:
+            self._session.flush()
         return conversation
 
     def add_message(
