@@ -16,6 +16,12 @@ class MemoryRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def commit(self) -> None:
+        self._session.commit()
+
+    def rollback(self) -> None:
+        self._session.rollback()
+
     def get_person(self, person_id: str) -> Person | None:
         return self._session.get(Person, person_id)
 
@@ -32,6 +38,7 @@ class MemoryRepository:
         aliases: list[str],
         relationship_to_user: str | None,
         now: datetime,
+        commit: bool = True,
     ) -> Person:
         person = self.get_person_by_name(canonical_name)
         if person is None:
@@ -51,8 +58,11 @@ class MemoryRepository:
             if relationship_to_user:
                 person.relationship_to_user = relationship_to_user
             person.updated_at = encode_dt(now)
-        self._session.commit()
-        self._session.refresh(person)
+        if commit:
+            self._session.commit()
+            self._session.refresh(person)
+        else:
+            self._session.flush()
         return person
 
     def create_memory(
@@ -66,6 +76,7 @@ class MemoryRepository:
         now: datetime,
         embedding: list[float] | None = None,
         embedding_model: str | None = None,
+        commit: bool = True,
     ) -> Memory:
         memory = Memory(
             id=str(uuid4()),
@@ -82,8 +93,11 @@ class MemoryRepository:
             updated_at=encode_dt(now),
         )
         self._session.add(memory)
-        self._session.commit()
-        self._session.refresh(memory)
+        if commit:
+            self._session.commit()
+            self._session.refresh(memory)
+        else:
+            self._session.flush()
         return memory
 
     def get_memory(self, identifier: str) -> Memory | None:
@@ -152,6 +166,7 @@ class MemoryRepository:
         now: datetime,
         embedding: list[float] | None = None,
         embedding_model: str | None = None,
+        commit: bool = True,
     ) -> Memory:
         if content is not None:
             memory.content = content.strip()
@@ -169,8 +184,11 @@ class MemoryRepository:
             memory.confidence = confidence
         memory.status = MemoryStatus.ACTIVE.value
         memory.updated_at = encode_dt(now)
-        self._session.commit()
-        self._session.refresh(memory)
+        if commit:
+            self._session.commit()
+            self._session.refresh(memory)
+        else:
+            self._session.flush()
         return memory
 
     def set_embedding(self, memory: Memory, embedding: list[float], *, model: str) -> None:
