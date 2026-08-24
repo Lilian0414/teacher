@@ -1,7 +1,8 @@
 # companion-baseline Specification
 
 ## Purpose
-TBD - created by archiving change reconcile-m2-baseline. Update Purpose after archive.
+Define the active companion baseline for deterministic availability, persisted English conversations and language support, long-term memory extraction and recall, and safe provider boundaries.
+
 ## Requirements
 ### Requirement: Deterministic availability controls
 
@@ -108,4 +109,3 @@ The system SHALL use fake providers for automated tests and SHALL access Groq on
 - **WHEN** Ruff, mypy, and pytest are run without the live-test opt-in
 - **THEN** no real Groq request is made
 - **AND** no API key appears in code, logs, test output, or Git
-
