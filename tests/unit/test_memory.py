@@ -13,6 +13,7 @@ from companion.memory.schemas import (
 )
 from companion.persistence.database import Base, make_engine
 from companion.providers.embeddings import EmbeddingProvider
+from companion.providers.errors import LLMInvalidResponseError
 from companion.schemas.conversation import MessageRole
 from tests.support import RecordingLLMProvider
 
@@ -161,6 +162,31 @@ async def test_greeting_candidate_is_rejected_by_policy() -> None:
 
     assert result.created == []
     assert result.skipped_count == 1
+    assert repository.list_memories() == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_extraction_is_controlled_and_persists_no_memory() -> None:
+    _, conversations, repository, service, provider = make_memory_services()
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    conversation = conversations.create_conversation(user_id="default", started_at=now)
+    conversations.add_message(
+        conversation_id=conversation.id,
+        role=MessageRole.USER,
+        content="Alex is my university classmate.",
+        language="en",
+        source="terminal",
+        created_at=now,
+    )
+    provider.memory_extraction_error = LLMInvalidResponseError(
+        "LLM returned invalid memory candidates"
+    )
+
+    result = await service.extract_conversation(conversation.id)
+
+    assert result.error == "LLM returned invalid memory candidates"
+    assert result.created == []
+    assert result.updated == []
     assert repository.list_memories() == []
 
 
