@@ -120,6 +120,27 @@ class LearningAttempt(Base):
     attempted_at: Mapped[str] = mapped_column(String(40))
 
 
+class LearningOccurrence(Base):
+    __tablename__ = "learning_occurrences"
+    __table_args__ = (UniqueConstraint("source_user_message_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    learning_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("learning_items.id"), index=True
+    )
+    source_conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("conversations.id"), index=True
+    )
+    source_user_message_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id"), index=True
+    )
+    source_assistant_message_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id"), index=True
+    )
+    acceptance_reason: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
 class ProactiveInvitation(Base):
     __tablename__ = "proactive_invitations"
     __table_args__ = (

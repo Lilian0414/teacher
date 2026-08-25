@@ -1,12 +1,38 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LearningKind(StrEnum):
     EXPRESSION = "expression"
     PHRASE = "phrase"
+
+
+class LearningSignalReason(StrEnum):
+    CORRECTION = "correction"
+    VOCABULARY = "vocabulary"
+    USEFUL_EXPRESSION = "useful_expression"
+
+
+class LearningSignalRequest(BaseModel):
+    conversation_id: str
+    user_message_id: str
+    assistant_message_id: str
+    user_content: str
+    assistant_content: str
+
+
+class LearningSignalCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_conversation_id: str
+    source_user_message_id: str
+    source_assistant_message_id: str
+    kind: LearningKind
+    review_prompt: str = Field(min_length=1, max_length=500)
+    accepted_answers: list[str] = Field(min_length=1, max_length=3)
+    reason: LearningSignalReason
 
 
 class LearningItemSchema(BaseModel):
