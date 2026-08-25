@@ -5,6 +5,8 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from companion.learning.prompts import LEARNING_SIGNAL_SYSTEM_PROMPT, learning_signal_user_prompt
+from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
 from companion.memory.prompts import (
     ANALYSIS_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
@@ -191,6 +193,23 @@ class GroqLLMProvider:
             return [MemoryCandidate.model_validate(item) for item in raw_candidates]
         except (json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
             raise LLMInvalidResponseError("LLM returned invalid memory candidates") from exc
+
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate | None:
+        self._ensure_configured()
+        content = await self._complete(
+            [
+                {"role": "system", "content": LEARNING_SIGNAL_SYSTEM_PROMPT},
+                {"role": "user", "content": learning_signal_user_prompt(request)},
+            ],
+            response_format={"type": "json_object"},
+        )
+        try:
+            candidate = json.loads(content)["candidate"]
+            return None if candidate is None else LearningSignalCandidate.model_validate(candidate)
+        except (json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
+            raise LLMInvalidResponseError("LLM returned invalid learning signal") from exc
 
     async def _complete(
         self,

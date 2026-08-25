@@ -110,6 +110,10 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
                 user_id=settings.user_id,
                 limit=settings.learning_context_limit,
             ),
+            learning_service=LearningService(
+                repository=LearningRepository(session),
+                user_id=settings.user_id,
+            ),
         )
 
 

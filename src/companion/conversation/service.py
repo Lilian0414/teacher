@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
 from companion.learning.context import LearningContextBuilder
+from companion.learning.schemas import LearningSignalRequest
+from companion.learning.service import LearningService
 from companion.memory.context import MemoryContextBuilder
 from companion.persistence.models import Conversation, Message
 from companion.persistence.repositories import decode_dt
@@ -44,6 +46,7 @@ class ConversationService:
         context_limit: int = 20,
         memory_context_builder: MemoryContextBuilder | None = None,
         learning_context_builder: LearningContextBuilder | None = None,
+        learning_service: LearningService | None = None,
     ) -> None:
         self._repository = repository
         self._llm_provider = llm_provider
@@ -52,6 +55,7 @@ class ConversationService:
         self._context_limit = context_limit
         self._memory_context_builder = memory_context_builder
         self._learning_context_builder = learning_context_builder
+        self._learning_service = learning_service
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -120,6 +124,23 @@ class ConversationService:
             source="terminal",
             created_at=self._clock(),
         )
+        if self._learning_service is not None:
+            request = LearningSignalRequest(
+                conversation_id=conversation_id,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                user_content=user_message.content,
+                assistant_content=assistant_message.content,
+            )
+            try:
+                candidate = await self._llm_provider.extract_learning_signal(request)
+                if candidate is not None:
+                    self._learning_service.capture_conversation_signal(
+                        request=request, candidate=candidate
+                    )
+            except Exception:
+                # Learning extraction is best-effort post-processing; chat is already durable.
+                pass
         return SendMessageResult(
             user_message=self._message_schema(user_message),
             assistant_message=self._message_schema(assistant_message),

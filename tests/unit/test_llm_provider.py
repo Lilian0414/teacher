@@ -3,6 +3,7 @@ from typing import Any, Self
 import httpx
 import pytest
 
+from companion.learning.schemas import LearningSignalRequest
 from companion.memory.schemas import (
     ExistingMemory,
     MemoryAnalysisRequest,
@@ -168,6 +169,21 @@ async def test_groq_invalid_memory_candidate_rejects_entire_response() -> None:
                     )
                 ],
                 existing_memories=[],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_groq_malformed_learning_signal_fails_safely() -> None:
+    provider = ScriptedGroqProvider(['{"candidate":{"stage":99}}'])
+    with pytest.raises(LLMInvalidResponseError, match="invalid learning signal"):
+        await provider.extract_learning_signal(
+            LearningSignalRequest(
+                conversation_id="conversation-1",
+                user_message_id="user-1",
+                assistant_message_id="assistant-1",
+                user_content="I very tired.",
+                assistant_content="Say: I am very tired.",
             )
         )
 

@@ -1,3 +1,4 @@
+from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
 from companion.memory.schemas import (
     MemoryAnalysis,
     MemoryAnalysisRequest,
@@ -25,6 +26,9 @@ class RecordingLLMProvider:
         self.memory_candidates: list[MemoryCandidate] = []
         self.memory_analysis = MemoryAnalysis(category=MemoryCategory.OTHER, confidence=1.0)
         self.memory_extraction_error: LLMProviderError | None = None
+        self.learning_signal: LearningSignalCandidate | None = None
+        self.learning_signal_error: Exception | None = None
+        self.learning_signal_requests: list[LearningSignalRequest] = []
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.chat_requests.append(request)
@@ -74,3 +78,11 @@ class RecordingLLMProvider:
         if self.memory_extraction_error is not None:
             raise self.memory_extraction_error
         return list(self.memory_candidates)
+
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate | None:
+        self.learning_signal_requests.append(request)
+        if self.learning_signal_error is not None:
+            raise self.learning_signal_error
+        return self.learning_signal
