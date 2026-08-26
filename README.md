@@ -54,9 +54,11 @@ with invalid source IDs, and exact duplicates are rejected by deterministic Core
 Deleted memories remain in SQLite with `status=deleted` but are excluded from recall and normal
 listing. Chat recall always retains name/text matching and sends at most five relevant entries to
 the configured LLM; it never sends the complete memory database. When embeddings are enabled,
-new and updated memories are embedded and query recall uses compatible vectors. Older or
-incompatible rows are lazily re-embedded, bounded by `EMBEDDING_BACKFILL_LIMIT` per query.
-Provider errors fall back to lexical/person matching.
+new and updated memories are embedded and query recall uses compatible vectors. Recall performs
+one asynchronous query embedding and compares only already-persisted vectors with matching model
+and dimensions; it never writes or lazily backfills during chat. Missing or
+incompatible vectors remain eligible through lexical/person matching, and provider errors use the
+same fallback.
 
 ## Learning Review
 
@@ -116,21 +118,22 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_TIMEOUT_SECONDS=30
 MEMORY_CONTEXT_LIMIT=5
 LEARNING_CONTEXT_LIMIT=3
-EMBEDDINGS_ENABLED=false
+EMBEDDINGS_ENABLED=true
 EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
 EMBEDDING_API_KEY=
 EMBEDDING_MODEL=nomic-embed-text
 EMBEDDING_DIMENSIONS=768
 EMBEDDING_TIMEOUT_SECONDS=10
-EMBEDDING_BACKFILL_LIMIT=10
 ```
 
 Keep real `GROQ_API_KEY` values in `.env` or the shell environment only. `/v1/state` reports a
 present key as `key_present_unverified` until an actual request proves the configured model is
 usable. Provider/model failures include the model and Groq's safe error detail, never the key.
-Embeddings are disabled by default. The embedding endpoint is OpenAI-compatible and may be a
-local server such as Ollama; model identity and exact dimensions are stored with every vector so
-incompatible vectors are never compared silently.
+The documented local semantic profile is enabled by default. Install and start Ollama once with
+`brew install ollama`, then run `ollama serve` and `ollama pull nomic-embed-text`. Set
+`EMBEDDINGS_ENABLED=false` for an explicit lexical-only profile. The embedding endpoint is
+OpenAI-compatible and uses asynchronous, batched requests; model identity and exact dimensions are
+stored with every vector so incompatible vectors are never compared silently.
 
 ## Reproducible dependencies and validation
 

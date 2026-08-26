@@ -95,15 +95,6 @@ class Settings(BaseSettings):
             "COMPANION_EMBEDDING_TIMEOUT_SECONDS",
         ),
     )
-    embedding_backfill_limit: int = Field(
-        default=10,
-        ge=0,
-        le=100,
-        validation_alias=AliasChoices(
-            "EMBEDDING_BACKFILL_LIMIT",
-            "COMPANION_EMBEDDING_BACKFILL_LIMIT",
-        ),
-    )
     learning_context_limit: int = Field(
         default=3,
         ge=1,

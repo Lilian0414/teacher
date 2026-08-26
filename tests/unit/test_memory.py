@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from companion.memory.schemas import (
     MemoryStatus,
 )
 from companion.persistence.database import Base, make_engine
+from companion.persistence.models import Memory
 from companion.providers.embeddings import EmbeddingProvider
 from companion.providers.errors import LLMInvalidResponseError
 from companion.schemas.conversation import MessageRole
@@ -27,6 +29,8 @@ class DeterministicEmbeddingProvider:
     ) -> None:
         self._vectors = vectors
         self._fail_for = fail_for or set()
+        self.embed_calls: list[str] = []
+        self.batch_calls: list[list[str]] = []
 
     @property
     def model(self) -> str:
@@ -36,10 +40,17 @@ class DeterministicEmbeddingProvider:
     def dimensions(self) -> int:
         return 2
 
-    def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str) -> list[float]:
+        self.embed_calls.append(text)
         if text in self._fail_for:
             raise RuntimeError("embedding provider unavailable")
         return list(self._vectors.get(text, [0.0, 0.0]))
+
+    async def embed_many(self, texts: Sequence[str]) -> list[Sequence[float]]:
+        self.batch_calls.append(list(texts))
+        if any(text in self._fail_for for text in texts):
+            raise RuntimeError("embedding provider unavailable")
+        return [list(self._vectors.get(text, [0.0, 0.0])) for text in texts]
 
 
 def make_memory_services(
@@ -228,7 +239,8 @@ async def test_candidate_update_changes_existing_memory_without_duplicate() -> N
     assert len(repository.list_memories()) == 1
 
 
-def test_memory_context_selects_only_relevant_memories_and_limits_to_five() -> None:
+@pytest.mark.asyncio
+async def test_memory_context_selects_only_relevant_memories_and_limits_to_five() -> None:
     _, _, repository, _, _ = make_memory_services()
     now = datetime(2026, 7, 19, 12, tzinfo=UTC)
     andy = repository.get_or_create_person(
@@ -256,7 +268,7 @@ def test_memory_context_selects_only_relevant_memories_and_limits_to_five() -> N
     )
     builder = MemoryContextBuilder(repository, limit=5)
 
-    selected = builder.select("How has Andy been lately?")
+    selected = await builder.select("How has Andy been lately?")
 
     assert len(selected) == 5
     assert all("Andy" in memory.content for memory in selected)
@@ -279,7 +291,7 @@ async def test_hybrid_retrieval_recalls_semantic_paraphrase_without_token_overla
     await service.remember(memory_text)
     await service.remember(irrelevant)
 
-    selected = MemoryContextBuilder(
+    selected = await MemoryContextBuilder(
         repository,
         embedding_provider=embedding_provider,
     ).select(query)
@@ -298,7 +310,7 @@ async def test_deleted_semantic_memory_is_never_recalled() -> None:
     remembered = await service.remember(memory_text)
     service.forget(remembered.id)
 
-    selected = MemoryContextBuilder(
+    selected = await MemoryContextBuilder(
         repository,
         embedding_provider=embedding_provider,
     ).select(query)
@@ -322,7 +334,7 @@ async def test_query_embedding_failure_falls_back_to_lexical_retrieval() -> None
     )
     await service.remember(memory_text)
 
-    selected = MemoryContextBuilder(
+    selected = await MemoryContextBuilder(
         repository,
         embedding_provider=embedding_provider,
     ).select(query)
@@ -356,6 +368,160 @@ async def test_write_embedding_failure_still_saves_memory_for_lexical_recall() -
     stored = repository.get_memory(remembered.id)
     assert stored is not None
     assert repository.decode_embedding(stored) is None
-    assert [item.id for item in MemoryContextBuilder(repository).select("vocabulary")] == [
+    assert [
+        item.id for item in await MemoryContextBuilder(repository).select("vocabulary")
+    ] == [
         remembered.id
     ]
+
+
+@pytest.mark.asyncio
+async def test_extraction_batches_embeddings_for_valid_candidates() -> None:
+    first = "The learner likes salmon."
+    second = "The learner studies before breakfast."
+    embedding_provider = DeterministicEmbeddingProvider(
+        {first: [1.0, 0.0], second: [0.0, 1.0]}
+    )
+    _, conversations, repository, service, provider = make_memory_services(embedding_provider)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    conversation = conversations.create_conversation(user_id="default", started_at=now)
+    message = conversations.add_message(
+        conversation_id=conversation.id,
+        role=MessageRole.USER,
+        content="I like salmon and study before breakfast.",
+        language="en",
+        source="terminal",
+        created_at=now,
+    )
+    provider.memory_candidates = [
+        MemoryCandidate(
+            category=MemoryCategory.PERSONAL,
+            content=first,
+            source_message_ids=[message.id],
+        ),
+        MemoryCandidate(
+            category=MemoryCategory.SCHOOL_WORK,
+            content=second,
+            source_message_ids=[message.id],
+        ),
+    ]
+
+    result = await service.extract_conversation(conversation.id)
+
+    assert len(result.created) == 2
+    assert embedding_provider.batch_calls == [[first, second]]
+    assert embedding_provider.embed_calls == []
+    assert all(repository.decode_embedding(memory) for memory in repository.list_memories())
+
+
+@pytest.mark.asyncio
+async def test_failed_content_reembedding_clears_stale_vector() -> None:
+    old = "Andy works at Company A."
+    new = "Andy now works at Company B."
+    embedding_provider = DeterministicEmbeddingProvider(
+        {old: [1.0, 0.0]}, fail_for={new}
+    )
+    _, conversations, repository, service, provider = make_memory_services(embedding_provider)
+    existing = await service.remember(old)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    conversation = conversations.create_conversation(user_id="default", started_at=now)
+    message = conversations.add_message(
+        conversation_id=conversation.id,
+        role=MessageRole.USER,
+        content=new,
+        language="en",
+        source="terminal",
+        created_at=now,
+    )
+    provider.memory_candidates = [
+        MemoryCandidate(
+            category=MemoryCategory.SCHOOL_WORK,
+            content=new,
+            source_message_ids=[message.id],
+            updates_memory_id=existing.id,
+        )
+    ]
+
+    result = await service.extract_conversation(conversation.id)
+
+    assert [item.content for item in result.updated] == [new]
+    stored = repository.get_memory(existing.id)
+    assert stored is not None
+    assert repository.decode_embedding(stored) is None
+    assert stored.embedding_model is None
+    assert stored.embedding_dimensions is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incompatibility", ["model", "dimensions"])
+async def test_recall_ignores_incompatible_stored_vectors(incompatibility: str) -> None:
+    text = "My favorite meal is salmon."
+    query = "What food do I like best?"
+    embedding_provider = DeterministicEmbeddingProvider({query: [1.0, 0.0]})
+    _, _, repository, _, _ = make_memory_services(embedding_provider)
+    stored = repository.create_memory(
+        category=MemoryCategory.PERSONAL,
+        content=text,
+        person_id=None,
+        source_conversation_id=None,
+        confidence=1.0,
+        now=datetime(2026, 7, 19, 12, tzinfo=UTC),
+        embedding=[1.0, 0.0] if incompatibility == "model" else [1.0, 0.0, 0.0],
+        embedding_model="old-model" if incompatibility == "model" else "deterministic-v1",
+    )
+
+    selected = await MemoryContextBuilder(
+        repository, embedding_provider=embedding_provider
+    ).select(query)
+
+    assert selected == []
+    assert repository.decode_embedding(stored) is not None
+    assert embedding_provider.embed_calls == [query]
+
+
+@pytest.mark.asyncio
+async def test_query_recall_is_bounded_and_never_mutates_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = "What food do I like best?"
+    embedding_provider = DeterministicEmbeddingProvider({query: [1.0, 0.0]})
+    _, _, repository, _, _ = make_memory_services(embedding_provider)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    for index in range(8):
+        repository.create_memory(
+            category=MemoryCategory.OTHER,
+            content=f"Unrelated record {index}.",
+            person_id=None,
+            source_conversation_id=None,
+            confidence=1.0,
+            now=now + timedelta(seconds=index),
+        )
+    observed_limits: list[int] = []
+    original_list = repository.list_memories
+
+    def bounded_list(
+        *, query: str | None = None, include_deleted: bool = False, limit: int = 100
+    ) -> list[Memory]:
+        observed_limits.append(limit)
+        return original_list(query=query, include_deleted=include_deleted, limit=limit)
+
+    monkeypatch.setattr(repository, "list_memories", bounded_list)
+    monkeypatch.setattr(
+        repository,
+        "set_embedding",
+        lambda *args, **kwargs: pytest.fail("recall attempted set_embedding"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "commit",
+        lambda: pytest.fail("recall attempted commit"),
+    )
+
+    selected = await MemoryContextBuilder(
+        repository, embedding_provider=embedding_provider, candidate_limit=3
+    ).select(query)
+
+    assert selected == []
+    assert observed_limits == [3]
+    assert embedding_provider.embed_calls == [query]
+    assert all(memory.embedding is None for memory in original_list(limit=100))

@@ -176,7 +176,7 @@ class ConversationService:
         ]
         contexts: list[str] = []
         if self._memory_context_builder is not None:
-            memory_context = self._memory_context_builder.build(current_message)
+            memory_context = await self._memory_context_builder.build(current_message)
             if memory_context:
                 contexts.append(memory_context)
         if self._learning_context_builder is not None:

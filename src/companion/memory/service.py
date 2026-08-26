@@ -58,6 +58,7 @@ class MemoryService:
             )
         except LLMProviderError:
             analysis = MemoryAnalysis(category=MemoryCategory.OTHER)
+        embedding = await self._embed(text)
         memory, _ = self._store(
             category=analysis.category,
             content=text,
@@ -67,6 +68,7 @@ class MemoryService:
             confidence=analysis.confidence,
             source_conversation_id=None,
             updates_memory_id=None,
+            embedding=embedding,
         )
         return memory_to_schema(memory, self._repository)
 
@@ -140,6 +142,7 @@ class MemoryService:
         source_messages = {message.id: message for message in messages}
         result = MemoryExtractionResult(conversation_id=conversation_id)
         try:
+            valid_candidates: list[MemoryCandidate] = []
             for candidate in candidates:
                 if not set(candidate.source_message_ids).issubset(valid_source_ids):
                     result.skipped_count += 1
@@ -155,7 +158,15 @@ class MemoryService:
                     and candidate.updates_memory_id not in offered_memory_ids
                 ):
                     raise MemoryValidationError("Memory update target was not offered")
-                stored, created = self._store_candidate(candidate, conversation_id)
+                valid_candidates.append(candidate)
+
+            embeddings = await self._embed_many(
+                [candidate.content for candidate in valid_candidates]
+            )
+            for candidate, embedding in zip(valid_candidates, embeddings, strict=True):
+                stored, created = self._store_candidate(
+                    candidate, conversation_id, embedding=embedding
+                )
                 schema = memory_to_schema(stored, self._repository)
                 if created:
                     result.created.append(schema)
@@ -180,6 +191,8 @@ class MemoryService:
         self,
         candidate: MemoryCandidate,
         conversation_id: str,
+        *,
+        embedding: list[float] | None,
     ) -> tuple[Memory, bool]:
         return self._store(
             category=candidate.category,
@@ -190,6 +203,7 @@ class MemoryService:
             confidence=candidate.confidence,
             source_conversation_id=conversation_id,
             updates_memory_id=candidate.updates_memory_id,
+            embedding=embedding,
         )
 
     def _store(
@@ -203,9 +217,9 @@ class MemoryService:
         confidence: float | None,
         source_conversation_id: str | None,
         updates_memory_id: str | None,
+        embedding: list[float] | None,
     ) -> tuple[Memory, bool]:
         now = self._clock()
-        embedding = self._embed(content)
         person = None
         if person_name:
             person = self._repository.get_or_create_person(
@@ -269,11 +283,11 @@ class MemoryService:
             True,
         )
 
-    def _embed(self, text: str) -> list[float] | None:
+    async def _embed(self, text: str) -> list[float] | None:
         if self._embedding_provider is None:
             return None
         try:
-            embedding = normalize_embedding(self._embedding_provider.embed(text))
+            embedding = normalize_embedding(await self._embedding_provider.embed(text))
             if embedding is None or len(embedding) != self._embedding_provider.dimensions:
                 return None
             return embedding
@@ -281,6 +295,28 @@ class MemoryService:
             # Storing the memory remains more important than optional semantic
             # metadata when the embedding provider is unavailable.
             return None
+
+    async def _embed_many(self, texts: list[str]) -> list[list[float] | None]:
+        if not texts:
+            return []
+        if self._embedding_provider is None:
+            return [None] * len(texts)
+        try:
+            raw_embeddings = await self._embedding_provider.embed_many(texts)
+            if len(raw_embeddings) != len(texts):
+                return [None] * len(texts)
+            embeddings = [normalize_embedding(value) for value in raw_embeddings]
+            if any(
+                embedding is None
+                or len(embedding) != self._embedding_provider.dimensions
+                for embedding in embeddings
+            ):
+                return [None] * len(texts)
+            return embeddings
+        except Exception:
+            # Embeddings are optional metadata; extraction remains one truthful,
+            # atomic memory transaction when a whole batch is unavailable.
+            return [None] * len(texts)
 
     def _embedding_model(self, embedding: list[float] | None) -> str | None:
         if embedding is None or self._embedding_provider is None:

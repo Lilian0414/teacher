@@ -16,7 +16,6 @@ def test_runtime_factory_accepts_documented_unprefixed_settings(
     monkeypatch.setenv("EMBEDDING_MODEL", "test-embedding-model")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "2")
     monkeypatch.setenv("EMBEDDING_TIMEOUT_SECONDS", "3.5")
-    monkeypatch.setenv("EMBEDDING_BACKFILL_LIMIT", "4")
 
     provider = get_embedding_provider()
 
@@ -27,7 +26,6 @@ def test_runtime_factory_accepts_documented_unprefixed_settings(
     settings = get_settings()
     assert settings.embedding_api_key == "test-key"
     assert settings.embedding_timeout_seconds == 3.5
-    assert settings.embedding_backfill_limit == 4
     assert get_embedding_provider() is provider
     get_settings.cache_clear()
     get_embedding_provider.cache_clear()
@@ -44,7 +42,6 @@ def test_settings_accept_prefixed_embedding_settings(
     monkeypatch.setenv("COMPANION_EMBEDDING_MODEL", "prefixed-model")
     monkeypatch.setenv("COMPANION_EMBEDDING_DIMENSIONS", "3")
     monkeypatch.setenv("COMPANION_EMBEDDING_TIMEOUT_SECONDS", "4.5")
-    monkeypatch.setenv("COMPANION_EMBEDDING_BACKFILL_LIMIT", "5")
 
     settings = get_settings()
 
@@ -54,7 +51,6 @@ def test_settings_accept_prefixed_embedding_settings(
     assert settings.embedding_model == "prefixed-model"
     assert settings.embedding_dimensions == 3
     assert settings.embedding_timeout_seconds == 4.5
-    assert settings.embedding_backfill_limit == 5
     get_settings.cache_clear()
     get_embedding_provider.cache_clear()
 

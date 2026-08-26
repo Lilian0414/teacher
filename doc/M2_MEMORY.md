@@ -66,9 +66,11 @@ request，並逐筆套用 deterministic policy：
 語意訊號讓「remembering new vocabulary」與「forgetting new words」這類低字面重疊
 的改寫仍能被召回。deleted memories 在 candidate query 階段即被排除。
 
-`EmbeddingProvider` 是同步、provider-neutral 的小型 protocol。Memory write／update 會
-儲存 provider 產生的向量，query 則只產生一次向量再對 candidates rerank。一般測試
-使用 deterministic fake provider，不呼叫外部 API。
+`EmbeddingProvider` 是非同步且支援 batch 的 provider-neutral protocol。Memory write／update
+會先非同步產生向量再保存；conversation-end extraction 會以單一 batch 處理多筆有效
+candidates。query 只產生一次向量，並只對已保存且 model 與 dimensions 完全相容的向量
+rerank；recall 不寫 DB、不 commit，也不在 query path lazy backfill。一般測試使用
+deterministic async fake provider，不呼叫外部 API。
 
 未配置 provider、provider 丟出例外、回傳空值／非有限數值，或既有 memory 尚未有
 embedding 時，都會安全降級成既有 lexical/person recall；普通聊天與記憶保存不會因

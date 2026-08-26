@@ -22,31 +22,17 @@ class MemoryContextBuilder:
         limit: int = 5,
         embedding_provider: EmbeddingProvider | None = None,
         candidate_limit: int = 200,
-        backfill_limit: int = 10,
     ) -> None:
         self._repository = repository
         self._limit = limit
         self._embedding_provider = embedding_provider
         self._candidate_limit = candidate_limit
-        self._backfill_limit = backfill_limit
 
-    def select(self, current_message: str) -> list[MemorySchema]:
-        query_embedding = self._embed(current_message)
+    async def select(self, current_message: str) -> list[MemorySchema]:
+        query_embedding = await self._embed(current_message)
         ranked: list[tuple[float, MemorySchema]] = []
-        backfilled = 0
         for memory in self._repository.list_memories(limit=self._candidate_limit):
             memory_embedding = self._compatible_embedding(memory)
-            if (
-                query_embedding is not None
-                and memory_embedding is None
-                and backfilled < self._backfill_limit
-            ):
-                memory_embedding = self._embed(memory.content)
-                backfilled += 1
-                if memory_embedding is not None and self._embedding_provider is not None:
-                    self._repository.set_embedding(
-                        memory, memory_embedding, model=self._embedding_provider.model
-                    )
             schema = memory_to_schema(memory, self._repository)
             score = hybrid_relevance_score(
                 current_message,
@@ -59,8 +45,8 @@ class MemoryContextBuilder:
         ranked.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
         return [memory for _, memory in ranked[: self._limit]]
 
-    def build(self, current_message: str) -> str | None:
-        selected = self.select(current_message)
+    async def build(self, current_message: str) -> str | None:
+        selected = await self.select(current_message)
         if not selected:
             return None
         contents = [
@@ -73,11 +59,11 @@ class MemoryContextBuilder:
         ]
         return memory_context_prompt(contents)
 
-    def _embed(self, text: str) -> list[float] | None:
+    async def _embed(self, text: str) -> list[float] | None:
         if self._embedding_provider is None:
             return None
         try:
-            embedding = normalize_embedding(self._embedding_provider.embed(text))
+            embedding = normalize_embedding(await self._embedding_provider.embed(text))
             if embedding is None or len(embedding) != self._embedding_provider.dimensions:
                 return None
             return embedding
