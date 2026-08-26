@@ -1,3 +1,4 @@
+from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
 from companion.memory.schemas import (
     MemoryAnalysis,
     MemoryAnalysisRequest,
@@ -21,12 +22,14 @@ class FakeLLMProvider:
         *,
         memory_candidates: list[MemoryCandidate] | None = None,
         memory_analysis: MemoryAnalysis | None = None,
+        learning_signal: LearningSignalCandidate | None = None,
     ) -> None:
         self._memory_candidates = memory_candidates or []
         self._memory_analysis = memory_analysis or MemoryAnalysis(
             category=MemoryCategory.OTHER,
             confidence=1.0,
         )
+        self._learning_signal = learning_signal
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         last_user = next(
@@ -62,3 +65,8 @@ class FakeLLMProvider:
         request: MemoryExtractionRequest,
     ) -> list[MemoryCandidate]:
         return list(self._memory_candidates)
+
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate | None:
+        return self._learning_signal

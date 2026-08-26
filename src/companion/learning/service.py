@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 from companion.clock import Clock, system_clock
@@ -7,6 +8,8 @@ from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
     LearningItemSchema,
     LearningKind,
+    LearningSignalCandidate,
+    LearningSignalRequest,
     ReviewQuestion,
     ReviewResult,
 )
@@ -15,6 +18,14 @@ from companion.persistence.repositories import decode_dt
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse, contains_cjk
 
 REVIEW_INTERVAL_DAYS = (1, 3, 7, 14, 30)
+CHITCHAT = re.compile(
+    r"^(?:"
+    r"(?:hi|hello|hey)(?:[ ,]+(?:there|how(?: are you|'s it going)))?"
+    r"|good (?:morning|afternoon|evening|night)"
+    r"|how(?: are you|'s it going)"
+    r"|thanks(?: a lot)?|thank you(?: very much)?"
+    r")$"
+)
 
 
 class LearningService:
@@ -51,6 +62,50 @@ class LearningService:
             now=self._clock(),
         )
         return self._schema(item)
+
+    def capture_conversation_signal(
+        self, *, request: LearningSignalRequest, candidate: LearningSignalCandidate
+    ) -> LearningItemSchema | None:
+        if self._is_chitchat(request.user_content):
+            return None
+        if (
+            candidate.source_conversation_id != request.conversation_id
+            or candidate.source_user_message_id != request.user_message_id
+            or candidate.source_assistant_message_id != request.assistant_message_id
+        ):
+            return None
+        prompt = candidate.review_prompt.strip()
+        answers = [answer.strip() for answer in candidate.accepted_answers if answer.strip()]
+        if (
+            not self._is_reviewable(prompt)
+            or not answers
+            or any(not self._is_reviewable(answer) for answer in answers)
+        ):
+            return None
+        occurrence = self._repository.capture_occurrence(
+            user_id=self._user_id,
+            prompt=prompt,
+            kind=candidate.kind,
+            accepted_answers=answers,
+            conversation_id=request.conversation_id,
+            user_message_id=request.user_message_id,
+            assistant_message_id=request.assistant_message_id,
+            acceptance_reason=candidate.reason.value,
+            now=self._clock(),
+        )
+        item = self._repository.get_item(occurrence.learning_item_id, user_id=self._user_id)
+        assert item is not None
+        return self._schema(item)
+
+    @staticmethod
+    def _is_reviewable(value: str) -> bool:
+        normalized = normalize_learning_text(value)
+        return len(normalized) >= 3 and normalized not in {"hello", "hi", "hey", "thanks"}
+
+    @staticmethod
+    def _is_chitchat(value: str) -> bool:
+        normalized = normalize_learning_text(value)
+        return CHITCHAT.fullmatch(normalized) is not None
 
     def first_due(self) -> ReviewQuestion | None:
         items = self._repository.due_items(user_id=self._user_id, now=self._clock(), limit=1)

@@ -5,12 +5,13 @@ from uuid import uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from companion.learning.errors import LearningItemNotDueError
 from companion.learning.normalization import merge_answers, normalize_learning_text
 from companion.learning.schemas import LearningKind
-from companion.persistence.models import LearningAttempt, LearningItem
+from companion.persistence.models import LearningAttempt, LearningItem, LearningOccurrence
 from companion.persistence.repositories import encode_dt
 
 
@@ -27,6 +28,7 @@ class LearningRepository:
         accepted_answers: list[str],
         source_command: str,
         now: datetime,
+        commit: bool = True,
     ) -> LearningItem:
         normalized_prompt = normalize_learning_text(prompt)
         item = self._session.scalars(
@@ -61,9 +63,68 @@ class LearningRepository:
                 item.kind = kind.value
             item.next_review_at = min(item.next_review_at, encoded_now)
             item.updated_at = encoded_now
-        self._session.commit()
-        self._session.refresh(item)
+        if commit:
+            self._session.commit()
+            self._session.refresh(item)
+        else:
+            self._session.flush()
         return item
+
+    def capture_occurrence(
+        self,
+        *,
+        user_id: str,
+        prompt: str,
+        kind: LearningKind,
+        accepted_answers: list[str],
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        acceptance_reason: str,
+        now: datetime,
+    ) -> LearningOccurrence:
+        existing = self.occurrence_for_user_message(user_message_id)
+        if existing is not None:
+            return existing
+        try:
+            item = self.upsert_item(
+                user_id=user_id,
+                prompt=prompt,
+                kind=kind,
+                accepted_answers=accepted_answers,
+                source_command="conversation",
+                now=now,
+                commit=False,
+            )
+            occurrence = LearningOccurrence(
+                id=str(uuid4()),
+                learning_item_id=item.id,
+                source_conversation_id=conversation_id,
+                source_user_message_id=user_message_id,
+                source_assistant_message_id=assistant_message_id,
+                acceptance_reason=acceptance_reason,
+                created_at=encode_dt(now),
+            )
+            self._session.add(occurrence)
+            self._session.commit()
+            self._session.refresh(occurrence)
+            return occurrence
+        except IntegrityError:
+            self._session.rollback()
+            existing = self.occurrence_for_user_message(user_message_id)
+            if existing is None:
+                raise
+            return existing
+
+    def occurrence_for_user_message(self, message_id: str) -> LearningOccurrence | None:
+        return self._session.scalar(
+            select(LearningOccurrence).where(
+                LearningOccurrence.source_user_message_id == message_id
+            )
+        )
+
+    def occurrences(self) -> list[LearningOccurrence]:
+        return list(self._session.scalars(select(LearningOccurrence)))
 
     def get_item(self, item_id: str, *, user_id: str) -> LearningItem | None:
         return self._session.scalar(
