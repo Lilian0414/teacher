@@ -34,6 +34,9 @@ class ConversationRepository:
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         return self._session.get(Conversation, conversation_id)
 
+    def get_message(self, message_id: str) -> Message | None:
+        return self._session.get(Message, message_id)
+
     def end_conversation(self, *, conversation_id: str, ended_at: datetime) -> Conversation | None:
         conversation = self.get_conversation(conversation_id)
         if conversation is None:

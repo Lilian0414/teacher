@@ -321,6 +321,82 @@ def test_say_result_has_no_debug_prefix() -> None:
     assert "assistant: That happens to everyone sometimes." in rendered
 
 
+@pytest.mark.asyncio
+async def test_say_partial_retry_preserves_evidence_until_assistant_succeeds() -> None:
+    requests: list[str] = []
+    retry_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal retry_attempts
+        requests.append(request.url.path)
+        if request.url.path == "/v1/commands/execute":
+            return httpx.Response(
+                200,
+                json={
+                    "command": "say",
+                    "ok": False,
+                    "message": "Inserted translated English into the conversation.",
+                    "inserted_into_conversation": True,
+                    "inserted_text": "I am tired today.",
+                    "inserted_user_message": {"id": "user-1"},
+                    "assistant_error": "Assistant unavailable",
+                    "retryable": True,
+                },
+            )
+        if request.url.path.endswith("/retry-assistant"):
+            retry_attempts += 1
+            if retry_attempts == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "ok": False,
+                        "user_message": {"id": "user-1"},
+                        "assistant_message": None,
+                        "error": "Still unavailable",
+                        "retryable": True,
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "user-1"},
+                    "assistant_message": {"id": "assistant-1", "content": "Rest well."},
+                    "error": None,
+                    "retryable": False,
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+
+    await terminal._send_command("/say 今天很累")
+    assert terminal._pending_assistant_retry == {
+        "conversation_id": "conversation-1",
+        "user_message_id": "user-1",
+    }
+    messages = cast(MessageSink, terminal._messages).values
+    assert "You said: I am tired today." in messages[-1]
+    assert "Assistant reply failed: Assistant unavailable" in messages[-1]
+
+    await terminal._retry_assistant_reply()
+    assert terminal._pending_assistant_retry is not None
+    await terminal._retry_assistant_reply()
+    assert terminal._pending_assistant_retry is None
+    assert messages[-1] == "assistant: Rest well."
+    assert requests == [
+        "/v1/commands/execute",
+        "/v1/conversations/conversation-1/messages/user-1/retry-assistant",
+        "/v1/conversations/conversation-1/messages/user-1/retry-assistant",
+    ]
+    await terminal._client.aclose()
+
+
 def test_startup_message_shows_provider_without_api_key() -> None:
     rendered = CompanionTerminal._startup_message(
         {

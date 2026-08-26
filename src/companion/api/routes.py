@@ -15,9 +15,11 @@ from companion.api.schemas import (
 from companion.availability import AvailabilityService, OverrideRequest
 from companion.commands.parser import AVAILABLE_COMMANDS, CommandParser
 from companion.conversation import (
+    AssistantRetryConflictError,
     ConversationEndedError,
     ConversationNotFoundError,
     ConversationService,
+    MessageNotFoundError,
 )
 from companion.learning import (
     LearningItemNotDueError,
@@ -366,6 +368,31 @@ async def send_message(
     )
 
 
+@router.post(
+    "/v1/conversations/{conversation_id}/messages/{user_message_id}/retry-assistant"
+)
+async def retry_assistant_reply(
+    conversation_id: str,
+    user_message_id: str,
+    conversation_service: ConversationService = ConversationDependency,
+) -> SendMessageResponse:
+    try:
+        result = await conversation_service.retry_assistant_reply(
+            conversation_id=conversation_id, user_message_id=user_message_id
+        )
+    except (ConversationNotFoundError, MessageNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Retry target not found") from exc
+    except (ConversationEndedError, AssistantRetryConflictError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "Retry target is stale") from exc
+    return SendMessageResponse(
+        ok=result.error is None,
+        user_message=result.user_message,
+        assistant_message=result.assistant_message,
+        error=result.error,
+        retryable=result.retryable,
+    )
+
+
 @router.post("/v1/conversations/{conversation_id}/end")
 async def end_conversation(
     conversation_id: str,
@@ -467,7 +494,9 @@ async def _execute_language_command(
             natural_expression=help_response.natural_expression,
             inserted_into_conversation=True,
             inserted_text=help_response.natural_expression,
+            inserted_user_message=result.user_message,
             assistant_message=result.assistant_message,
+            assistant_error=result.error,
             retryable=result.retryable,
         )
 

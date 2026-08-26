@@ -35,6 +35,14 @@ class ConversationEndedError(Exception):
     pass
 
 
+class MessageNotFoundError(Exception):
+    pass
+
+
+class AssistantRetryConflictError(Exception):
+    pass
+
+
 class ConversationService:
     def __init__(
         self,
@@ -103,10 +111,43 @@ class ConversationService:
             source="terminal",
             created_at=self._clock(),
         )
+        return await self._reply_to_user_message(user_message)
+
+    async def retry_assistant_reply(
+        self, *, conversation_id: str, user_message_id: str
+    ) -> SendMessageResult:
+        conversation = self._require_conversation(conversation_id)
+        if conversation.ended_at is not None:
+            raise ConversationEndedError(conversation_id)
+        target = self._repository.get_message(user_message_id)
+        if target is None or target.conversation_id != conversation_id:
+            raise MessageNotFoundError(user_message_id)
+        if target.role != MessageRole.USER.value:
+            raise AssistantRetryConflictError("Retry target must be a user message")
+
+        messages = self._repository.list_messages(conversation_id)
+        target_index = next(
+            (index for index, message in enumerate(messages) if message.id == target.id), None
+        )
+        if target_index is None:
+            raise MessageNotFoundError(user_message_id)
+        later = messages[target_index + 1 :]
+        if not later:
+            return await self._reply_to_user_message(target)
+        if len(later) == 1 and later[0].role == MessageRole.ASSISTANT.value:
+            return SendMessageResult(
+                user_message=self._message_schema(target),
+                assistant_message=self._message_schema(later[0]),
+                error=None,
+                retryable=False,
+            )
+        raise AssistantRetryConflictError("Retry target is no longer the conversation tail")
+
+    async def _reply_to_user_message(self, user_message: Message) -> SendMessageResult:
         try:
             assistant_content = await self._generate_assistant_reply(
-                conversation_id,
-                current_message=content,
+                user_message.conversation_id,
+                current_message=user_message.content,
             )
         except LLMProviderError as exc:
             return SendMessageResult(
@@ -117,7 +158,7 @@ class ConversationService:
             )
 
         assistant_message = self._repository.add_message(
-            conversation_id=conversation_id,
+            conversation_id=user_message.conversation_id,
             role=MessageRole.ASSISTANT,
             content=assistant_content,
             language="en",
@@ -126,7 +167,7 @@ class ConversationService:
         )
         if self._learning_service is not None:
             request = LearningSignalRequest(
-                conversation_id=conversation_id,
+                conversation_id=user_message.conversation_id,
                 user_message_id=user_message.id,
                 assistant_message_id=assistant_message.id,
                 user_content=user_message.content,

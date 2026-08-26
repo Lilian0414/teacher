@@ -16,8 +16,9 @@ from companion.learning import LearningRepository, LearningService
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
+from companion.providers.errors import LLMTemporaryError
 from companion.providers.fake import FakeLLMProvider
-from companion.providers.schemas import LanguageHelpMode
+from companion.providers.schemas import ChatRequest, ChatResponse, LanguageHelpMode
 from tests.support import RecordingLLMProvider
 
 
@@ -138,6 +139,73 @@ def test_say_inserts_translation_and_assistant_reply() -> None:
         "user",
         "assistant",
     ]
+
+
+def test_say_partial_failure_retries_existing_user_message_idempotently() -> None:
+    class FailChatOnceProvider(RecordingLLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def chat(self, request: ChatRequest) -> ChatResponse:
+            self.chat_requests.append(request)
+            self.attempts += 1
+            if self.attempts == 1:
+                raise LLMTemporaryError("Assistant is temporarily unavailable")
+            return ChatResponse(content="Recovered assistant reply")
+
+    provider = FailChatOnceProvider()
+    with make_client_with_provider(provider) as client:
+        conversation = client.post("/v1/conversations").json()
+        partial = client.post(
+            "/v1/commands/execute",
+            json={"raw": "/say 今天很累", "conversation_id": conversation["id"]},
+        ).json()
+        user_id = partial["inserted_user_message"]["id"]
+        after_failure = client.get(f"/v1/conversations/{conversation['id']}").json()
+        retry_url = (
+            f"/v1/conversations/{conversation['id']}/messages/{user_id}/retry-assistant"
+        )
+        retried = client.post(retry_url).json()
+        repeated = client.post(retry_url).json()
+        stored = client.get(f"/v1/conversations/{conversation['id']}").json()
+
+    assert partial["ok"] is False
+    assert partial["inserted_into_conversation"] is True
+    assert partial["assistant_error"] == "Assistant is temporarily unavailable"
+    assert partial["retryable"] is True
+    assert [message["id"] for message in after_failure["conversation"]["messages"]] == [user_id]
+    assert retried["user_message"]["id"] == user_id
+    assert repeated["assistant_message"]["id"] == retried["assistant_message"]["id"]
+    assert [message["role"] for message in stored["conversation"]["messages"]] == [
+        "user",
+        "assistant",
+    ]
+    assert all(
+        message["content"] != "Assistant is temporarily unavailable"
+        for message in stored["conversation"]["messages"]
+    )
+    assert len(provider.language_requests) == 1
+    assert len(provider.chat_requests) == 2
+
+
+def test_assistant_retry_rejects_non_user_and_stale_targets() -> None:
+    with make_client() as client:
+        conversation = client.post("/v1/conversations").json()
+        first = client.post(
+            f"/v1/conversations/{conversation['id']}/messages", json={"content": "First"}
+        ).json()
+        client.post(
+            f"/v1/conversations/{conversation['id']}/messages", json={"content": "Later"}
+        )
+        base = f"/v1/conversations/{conversation['id']}/messages"
+        stale = client.post(f"{base}/{first['user_message']['id']}/retry-assistant")
+        non_user = client.post(f"{base}/{first['assistant_message']['id']}/retry-assistant")
+        missing = client.post(f"{base}/missing/retry-assistant")
+
+    assert stale.status_code == 409
+    assert non_user.status_code == 409
+    assert missing.status_code == 404
 
 
 def test_missing_command_content_returns_usage() -> None:
