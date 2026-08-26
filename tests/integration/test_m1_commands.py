@@ -231,6 +231,37 @@ def test_say_requires_valid_conversation_id() -> None:
     assert "conversation_id" in invalid["message"]
 
 
+def test_say_after_ended_conversation_returns_conflict_without_persistence() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = Session(engine)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    provider = RecordingLLMProvider()
+    service = ConversationService(
+        repository=ConversationRepository(session),
+        llm_provider=provider,
+        clock=lambda: now,
+    )
+    conversation = service.create_conversation()
+    service.end_conversation(conversation.id)
+    app = create_app()
+    app.dependency_overrides[get_conversation_service] = lambda: service
+    app.dependency_overrides[get_llm_provider] = lambda: provider
+    app.dependency_overrides[get_availability_service] = lambda: AvailabilityService(
+        repository=AvailabilityRepository(session), clock=lambda: now
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/commands/execute",
+            json={"raw": "/say 今天很累", "conversation_id": conversation.id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Conversation has ended"
+    assert service.get_conversation(conversation.id).messages == []
+
+
 def test_language_commands_call_provider_and_preserve_full_help_content() -> None:
     provider = RecordingLLMProvider()
     with make_client_with_provider(provider) as client:

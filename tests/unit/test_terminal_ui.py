@@ -118,6 +118,132 @@ async def test_practice_chat_is_finalized_once_with_returned_message_ids() -> No
 
 
 @pytest.mark.asyncio
+async def test_practice_partial_failure_retries_original_message_and_finalizes_once() -> None:
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = __import__("json").loads(request.content) if request.content else None
+        requests.append((request.url.path, payload))
+        if request.url.path == "/v1/conversations/conversation-1/messages":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": False,
+                    "user_message": {"id": "original-user"},
+                    "assistant_message": None,
+                    "error": "Assistant unavailable",
+                    "retryable": True,
+                },
+            )
+        if request.url.path.endswith("/retry-assistant"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "original-user"},
+                    "assistant_message": {"id": "assistant-1", "content": "Nice answer."},
+                    "error": None,
+                    "retryable": False,
+                },
+            )
+        if request.url.path.endswith("/practice/complete"):
+            return httpx.Response(200, json={"outcome": "completed_not_evaluated"})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    await terminal._send_chat_message("My original answer.")
+
+    assert terminal._pending_assistant_retry == {
+        "conversation_id": "conversation-1",
+        "user_message_id": "original-user",
+        "invitation_id": "invite-1",
+    }
+    assert terminal._mode_button_specs()[0] == ("Retry reply", "retry_assistant")
+    assert terminal.check_action("retry_assistant", ()) is True
+
+    await terminal._retry_assistant_reply()
+
+    assert requests == [
+        ("/v1/conversations/conversation-1/messages", {"content": "My original answer."}),
+        (
+            "/v1/conversations/conversation-1/messages/original-user/retry-assistant",
+            None,
+        ),
+        (
+            "/v1/proactive/invitations/invite-1/practice/complete",
+            {
+                "conversation_id": "conversation-1",
+                "user_message_id": "original-user",
+                "assistant_message_id": "assistant-1",
+            },
+        ),
+    ]
+    assert terminal._pending_assistant_retry is None
+    assert terminal._active_practice_invitation_id is None
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_partial_failure_offers_retry_for_persisted_message() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(
+                200,
+                json={
+                    "ok": False,
+                    "user_message": {"id": "original-user"},
+                    "assistant_message": None,
+                    "error": "Assistant unavailable",
+                    "retryable": True,
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "user_message": {"id": "original-user"},
+                "assistant_message": {"id": "assistant-1", "content": "Recovered."},
+                "error": None,
+                "retryable": False,
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+
+    await terminal._send_chat_message("Persist this once.")
+    assert terminal._pending_assistant_retry == {
+        "conversation_id": "conversation-1",
+        "user_message_id": "original-user",
+    }
+    assert "Your message was saved" in cast(MessageSink, terminal._messages).values[-1]
+
+    await terminal._retry_assistant_reply()
+
+    assert requests == [
+        "/v1/conversations/conversation-1/messages",
+        "/v1/conversations/conversation-1/messages/original-user/retry-assistant",
+    ]
+    assert terminal._pending_assistant_retry is None
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_practice_finalization_retry_does_not_resend_chat() -> None:
     requests: list[tuple[str, dict[str, Any] | None]] = []
     completion_attempts = 0

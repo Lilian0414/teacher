@@ -140,9 +140,9 @@ class CompanionTerminal(App[None]):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "retry_assistant":
-            return (
-                self._mode == InteractionMode.NORMAL
-                and self._pending_assistant_retry is not None
+            return self._pending_assistant_retry is not None and self._mode in (
+                InteractionMode.NORMAL,
+                InteractionMode.PRACTICE_PROMPT,
             )
         if action in {"help_intent", "hint_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
@@ -343,6 +343,12 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
                 return [None, None, ("Retry completion", "cancel_intent")]
+            if self._pending_assistant_retry is not None:
+                return [
+                    ("Retry reply", "retry_assistant"),
+                    None,
+                    ("Skip practice", "cancel_intent"),
+                ]
             return [None, None, ("Skip practice", "cancel_intent")]
         if self._pending_assistant_retry is not None:
             return [
@@ -551,6 +557,15 @@ class CompanionTerminal(App[None]):
         self._messages.write(f"assistant: {assistant['content']}")
         self._pending_assistant_retry = None
         self._after_mode_change()
+        invitation_id = evidence.get("invitation_id")
+        if invitation_id is not None:
+            self._pending_practice_completion = {
+                "invitation_id": invitation_id,
+                "conversation_id": evidence["conversation_id"],
+                "user_message_id": evidence["user_message_id"],
+                "assistant_message_id": str(assistant["id"]),
+            }
+            await self._finalize_practice()
 
     async def _submit_review_answer(self, answer: str) -> None:
         item_id = self._active_review_item_id
@@ -595,6 +610,23 @@ class CompanionTerminal(App[None]):
         response.raise_for_status()
         result = response.json()
         if not result.get("ok"):
+            user_message = result.get("user_message")
+            if result.get("retryable") and isinstance(user_message, dict):
+                self._pending_assistant_retry = {
+                    "conversation_id": self._conversation_id,
+                    "user_message_id": str(user_message["id"]),
+                }
+                if self._mode == InteractionMode.PRACTICE_PROMPT:
+                    invitation_id = self._active_practice_invitation_id
+                    if invitation_id is None:
+                        raise ValueError("Invalid practice retry state")
+                    self._pending_assistant_retry["invitation_id"] = invitation_id
+                self._messages.write(
+                    "[system] Your message was saved, but the assistant reply failed: "
+                    f"{result.get('error', 'Message failed.')} Choose Retry reply."
+                )
+                self._after_mode_change()
+                return
             self._messages.write(f"[system] {result.get('error', 'Message failed.')}")
             return
         if echo_user:

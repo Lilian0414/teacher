@@ -487,6 +487,8 @@ async def _execute_language_command(
                 ok=False,
                 message="/say requires a valid conversation_id.",
             )
+        except ConversationEndedError as exc:
+            raise HTTPException(status_code=409, detail="Conversation has ended") from exc
         return CommandResponse(
             command="say",
             ok=result.error is None,

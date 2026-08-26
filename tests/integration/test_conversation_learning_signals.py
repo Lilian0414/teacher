@@ -177,6 +177,56 @@ async def test_translated_say_retry_remains_ineligible_without_duplicate_message
 
 
 @pytest.mark.asyncio
+async def test_ordinary_retry_reuses_original_pair_and_captures_learning_once() -> None:
+    class FailChatOnceProvider(BoundSignalProvider):
+        async def chat(self, request: ChatRequest) -> ChatResponse:
+            self.chat_requests.append(request)
+            if len(self.chat_requests) == 1:
+                raise LLMTemporaryError("Assistant is temporarily unavailable")
+            return ChatResponse(content="Recovered assistant reply")
+
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = FailChatOnceProvider()
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+        )
+        conversation = service.create_conversation()
+
+        partial = await service.send_user_message(
+            conversation_id=conversation.id,
+            content="Today was completely exhausting.",
+        )
+        retried = await service.retry_assistant_reply(
+            conversation_id=conversation.id,
+            user_message_id=partial.user_message.id,
+        )
+        repeated = await service.retry_assistant_reply(
+            conversation_id=conversation.id,
+            user_message_id=partial.user_message.id,
+        )
+        stored = service.get_conversation(conversation.id)
+
+        assert partial.assistant_message is None
+        assert retried.assistant_message is not None
+        assert repeated.user_message.id == partial.user_message.id
+        assert repeated.assistant_message == retried.assistant_message
+        assert [message.id for message in stored.messages] == [
+            partial.user_message.id,
+            retried.assistant_message.id,
+        ]
+        occurrences = learning_repository.occurrences()
+        assert len(occurrences) == 1
+        assert occurrences[0].source_user_message_id == partial.user_message.id
+        assert occurrences[0].source_assistant_message_id == retried.assistant_message.id
+        assert len(provider.learning_signal_requests) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [None, LLMInvalidResponseError("malformed")])
 async def test_no_candidate_or_extraction_failure_preserves_successful_chat(
     failure: Exception | None,
