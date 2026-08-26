@@ -108,6 +108,7 @@ class CompanionTerminal(App[None]):
         self._pending_invitation: dict[str, Any] | None = None
         self._active_practice_invitation_id: str | None = None
         self._pending_practice_completion: dict[str, str] | None = None
+        self._pending_assistant_retry: dict[str, str] | None = None
         self._last_activity = time.monotonic()
 
     def compose(self) -> ComposeResult:
@@ -138,6 +139,11 @@ class CompanionTerminal(App[None]):
     # ------------------------------------------------------------------
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "retry_assistant":
+            return (
+                self._mode == InteractionMode.NORMAL
+                and self._pending_assistant_retry is not None
+            )
         if action in {"help_intent", "hint_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
         if action == "use_suggestion":
@@ -170,6 +176,11 @@ class CompanionTerminal(App[None]):
         if self._waiting or self._mode != InteractionMode.NORMAL:
             return
         await self._run_guarded(self._run_review_intent)
+
+    async def action_retry_assistant(self) -> None:
+        if self._waiting or self._pending_assistant_retry is None:
+            return
+        await self._run_guarded(self._retry_assistant_reply)
 
     async def action_use_suggestion(self) -> None:
         if (
@@ -333,6 +344,12 @@ class CompanionTerminal(App[None]):
             if self._pending_practice_completion is not None:
                 return [None, None, ("Retry completion", "cancel_intent")]
             return [None, None, ("Skip practice", "cancel_intent")]
+        if self._pending_assistant_retry is not None:
+            return [
+                ("Retry reply", "retry_assistant"),
+                ("Give me a hint", "hint_intent"),
+                ("Review", "review_intent"),
+            ]
         return [
             ("Help me say it", "help_intent"),
             ("Give me a hint", "hint_intent"),
@@ -479,6 +496,19 @@ class CompanionTerminal(App[None]):
         result = await self._post_command(raw)
         self._messages.write(self._format_command_result(result))
         command = result.get("command")
+        if command == "say":
+            inserted = result.get("inserted_user_message")
+            if (
+                not result.get("ok")
+                and result.get("retryable")
+                and isinstance(inserted, dict)
+                and self._conversation_id is not None
+            ):
+                self._pending_assistant_retry = {
+                    "conversation_id": self._conversation_id,
+                    "user_message_id": str(inserted["id"]),
+                }
+                self._after_mode_change()
         if command == "review" and result.get("ok"):
             question = result.get("review_question")
             if isinstance(question, dict):
@@ -491,6 +521,36 @@ class CompanionTerminal(App[None]):
                 self._reset_to_normal()
         elif command == "review_quit" and result.get("ok"):
             self._reset_to_normal()
+
+    async def _retry_assistant_reply(self) -> None:
+        evidence = self._pending_assistant_retry
+        if evidence is None:
+            raise ValueError("No assistant reply is pending")
+        response = await self._client.post(
+            "/v1/conversations/"
+            f"{evidence['conversation_id']}/messages/{evidence['user_message_id']}"
+            "/retry-assistant"
+        )
+        if response.status_code in (404, 409):
+            payload = cast(dict[str, Any], response.json())
+            detail = payload.get("detail", "Assistant reply can no longer be retried.")
+            self._messages.write(f"[system] {detail}")
+            self._pending_assistant_retry = None
+            self._after_mode_change()
+            return
+        response.raise_for_status()
+        result = cast(dict[str, Any], response.json())
+        if not result.get("ok"):
+            self._messages.write(
+                f"[system] Assistant reply failed: {result.get('error', 'Retry failed.')}"
+            )
+            return
+        assistant = result.get("assistant_message")
+        if not isinstance(assistant, dict):
+            raise ValueError("Invalid assistant retry response")
+        self._messages.write(f"assistant: {assistant['content']}")
+        self._pending_assistant_retry = None
+        self._after_mode_change()
 
     async def _submit_review_answer(self, answer: str) -> None:
         item_id = self._active_review_item_id
@@ -671,6 +731,8 @@ class CompanionTerminal(App[None]):
     @staticmethod
     def _format_command_result(payload: dict[str, Any]) -> str:
         command = payload.get("command")
+        if command == "say" and payload.get("inserted_into_conversation"):
+            return CompanionTerminal._format_say(payload)
         if not payload.get("ok"):
             return f"[system] {payload.get('message', 'Command failed.')}"
         if command == "help":
@@ -749,6 +811,9 @@ class CompanionTerminal(App[None]):
         assistant = payload.get("assistant_message")
         if assistant is not None:
             lines.append(f"assistant: {assistant['content']}")
+        assistant_error = payload.get("assistant_error")
+        if assistant_error:
+            lines.append(f"[system] Assistant reply failed: {assistant_error}")
         return "\n".join(lines) if lines else str(payload.get("message", "Sent."))
 
     @staticmethod

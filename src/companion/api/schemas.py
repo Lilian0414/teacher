@@ -27,6 +27,8 @@ class CommandResponse(BaseModel):
     hints: list[str] = Field(default_factory=list)
     inserted_into_conversation: bool | None = None
     inserted_text: str | None = None
+    inserted_user_message: MessageSchema | None = None
+    assistant_error: str | None = None
     assistant_message: MessageSchema | None = None
     memory: MemorySchema | None = None
     memories: list[MemorySchema] = Field(default_factory=list)
