@@ -158,3 +158,20 @@ class ProactiveInvitation(Base):
     local_date: Mapped[str] = mapped_column(String(10))
     starter_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     starter_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("conversations.id"), nullable=True, index=True
+    )
+    user_message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id"), nullable=True, unique=True
+    )
+    assistant_message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id"), nullable=True
+    )
+    learning_occurrence_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("learning_occurrences.id"), nullable=True
+    )
+    learning_item_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("learning_items.id"), nullable=True
+    )
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)

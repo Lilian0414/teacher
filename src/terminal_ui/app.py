@@ -106,6 +106,8 @@ class CompanionTerminal(App[None]):
         self._pending_help_expression: str | None = None
         self._due_review_count = 0
         self._pending_invitation: dict[str, Any] | None = None
+        self._active_practice_invitation_id: str | None = None
+        self._pending_practice_completion: dict[str, str] | None = None
         self._last_activity = time.monotonic()
 
     def compose(self) -> ComposeResult:
@@ -184,6 +186,9 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             await self._run_guarded(lambda: self._send_command("/review quit"))
             return
+        if self._mode == InteractionMode.PRACTICE_PROMPT:
+            await self._run_guarded(self._abandon_practice)
+            return
         was_help_result = self._mode == InteractionMode.HELP_RESULT
         self._reset_to_normal()
         if was_help_result:
@@ -194,8 +199,11 @@ class CompanionTerminal(App[None]):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._waiting:
             return
-        decisions = {"invitation-start": "start", "invitation-later": "snooze",
-                     "invitation-dismiss": "dismiss_today"}
+        decisions = {
+            "invitation-start": "start",
+            "invitation-later": "snooze",
+            "invitation-dismiss": "dismiss_today",
+        }
         if event.button.id in decisions:
             decision = decisions[event.button.id or ""]
             await self._run_guarded(lambda: self._respond_to_invitation(decision))
@@ -322,6 +330,8 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             return [None, None, ("Stop review", "cancel_intent")]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
+            if self._pending_practice_completion is not None:
+                return [None, None, ("Retry completion", "cancel_intent")]
             return [None, None, ("Skip practice", "cancel_intent")]
         return [
             ("Help me say it", "help_intent"),
@@ -370,19 +380,24 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._submit_review_answer(raw))
         else:
             await self._run_guarded(lambda: self._send_chat_message(raw))
-            if self._mode == InteractionMode.PRACTICE_PROMPT:
-                self._reset_to_normal()
 
     def _can_present_invitation(self) -> bool:
-        return (not self._waiting and self._mode == InteractionMode.NORMAL
-                and self._active_review_item_id is None and self._pending_invitation is None)
+        return (
+            not self._waiting
+            and self._mode == InteractionMode.NORMAL
+            and self._active_review_item_id is None
+            and self._pending_invitation is None
+        )
 
     async def check_proactive_invitation(self) -> None:
         try:
-            response = await self._client.post("/v1/proactive/check", json={
-                "idle_seconds": max(0.0, time.monotonic() - self._last_activity),
-                "can_present": self._can_present_invitation(),
-            })
+            response = await self._client.post(
+                "/v1/proactive/check",
+                json={
+                    "idle_seconds": max(0.0, time.monotonic() - self._last_activity),
+                    "can_present": self._can_present_invitation(),
+                },
+            )
             response.raise_for_status()
             invitation = response.json().get("invitation")
             if isinstance(invitation, dict) and self._can_present_invitation():
@@ -391,9 +406,7 @@ class CompanionTerminal(App[None]):
                 text = (
                     "A review is ready when you are."
                     if kind == "review"
-                    else str(
-                        invitation.get("starter_prompt") or "Ready for a short conversation?"
-                    )
+                    else str(invitation.get("starter_prompt") or "Ready for a short conversation?")
                 )
                 self._invitation.update(f"Practice invitation\n{text}")
                 self._invitation.display = True
@@ -428,6 +441,7 @@ class CompanionTerminal(App[None]):
         elif payload.get("review_complete"):
             self._messages.write("No items are due. Review complete.")
         elif isinstance(payload.get("conversation_starter"), str):
+            self._active_practice_invitation_id = str(invitation["id"])
             self._mode = InteractionMode.PRACTICE_PROMPT
             self._messages.write(f"Practice prompt: {payload['conversation_starter']}")
             self._after_mode_change()
@@ -507,6 +521,9 @@ class CompanionTerminal(App[None]):
             self._reset_to_normal()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
+        if self._pending_practice_completion is not None:
+            await self._finalize_practice()
+            return
         await self.ensure_conversation()
         if self._conversation_id is None:
             self._messages.write("[system] No active conversation.")
@@ -525,6 +542,63 @@ class CompanionTerminal(App[None]):
         assistant = result.get("assistant_message")
         if assistant is not None:
             self._messages.write(f"assistant: {assistant['content']}")
+        if self._mode == InteractionMode.PRACTICE_PROMPT:
+            invitation_id = self._active_practice_invitation_id
+            user_message = result.get("user_message")
+            if (
+                invitation_id is None
+                or not isinstance(user_message, dict)
+                or not isinstance(assistant, dict)
+            ):
+                raise ValueError("Invalid practice message response")
+            self._pending_practice_completion = {
+                "invitation_id": invitation_id,
+                "conversation_id": self._conversation_id,
+                "user_message_id": str(user_message["id"]),
+                "assistant_message_id": str(assistant["id"]),
+            }
+            self._input.placeholder = "Practice sent — retry completion if needed..."
+            self._after_mode_change()
+            await self._finalize_practice()
+
+    async def _finalize_practice(self) -> None:
+        evidence = self._pending_practice_completion
+        if evidence is None:
+            raise ValueError("No practice completion is pending")
+        completion = await self._client.post(
+            f"/v1/proactive/invitations/{evidence['invitation_id']}/practice/complete",
+            json={
+                "conversation_id": evidence["conversation_id"],
+                "user_message_id": evidence["user_message_id"],
+                "assistant_message_id": evidence["assistant_message_id"],
+            },
+        )
+        completion.raise_for_status()
+        outcome = completion.json().get("outcome")
+        if outcome == "learning_signal_captured":
+            self._messages.write(
+                "Practice complete. A useful learning point was saved for review."
+            )
+        else:
+            self._messages.write("Practice complete. This conversation was not graded.")
+        self._pending_practice_completion = None
+        self._active_practice_invitation_id = None
+        self._reset_to_normal()
+
+    async def _abandon_practice(self) -> None:
+        if self._pending_practice_completion is not None:
+            await self._finalize_practice()
+            return
+        invitation_id = self._active_practice_invitation_id
+        if invitation_id is None:
+            raise ValueError("No active practice invitation")
+        response = await self._client.post(
+            f"/v1/proactive/invitations/{invitation_id}/practice/abandon"
+        )
+        response.raise_for_status()
+        self._active_practice_invitation_id = None
+        self._reset_to_normal()
+        self._messages.write("Practice skipped.")
 
     async def refresh_state(self) -> dict[str, Any] | None:
         try:
@@ -540,9 +614,7 @@ class CompanionTerminal(App[None]):
     async def action_quit(self) -> None:
         if self._conversation_id is not None:
             try:
-                response = await self._client.post(
-                    f"/v1/conversations/{self._conversation_id}/end"
-                )
+                response = await self._client.post(f"/v1/conversations/{self._conversation_id}/end")
                 response.raise_for_status()
                 payload = response.json()
                 extraction = payload.get("memory_extraction")
@@ -630,10 +702,7 @@ class CompanionTerminal(App[None]):
         if command == "forget":
             memory = payload.get("memory")
             if payload.get("confirmation_required") and isinstance(memory, dict):
-                return (
-                    f"{CompanionTerminal._format_memory(memory)}\n"
-                    f"{payload.get('message')}"
-                )
+                return f"{CompanionTerminal._format_memory(memory)}\n{payload.get('message')}"
             return str(payload.get("message"))
         return str(payload.get("message", "Command completed."))
 

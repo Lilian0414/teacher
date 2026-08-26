@@ -1,4 +1,5 @@
 """Deterministic M4 in-app proactive practice."""
+
 from companion.proactive.errors import InvitationConflictError, InvitationNotFoundError
 from companion.proactive.repository import ProactiveRepository
 from companion.proactive.schemas import (
@@ -6,6 +7,8 @@ from companion.proactive.schemas import (
     InvitationKind,
     InvitationSchema,
     InvitationStatus,
+    PracticeFinalizeRequest,
+    PracticeOutcome,
     ProactiveCheckRequest,
     ProactiveCheckResponse,
     ProactiveRespondRequest,
@@ -14,8 +17,18 @@ from companion.proactive.schemas import (
 from companion.proactive.service import ProactiveService
 
 __all__ = [
-    "InvitationConflictError", "InvitationDecision", "InvitationKind",
-    "InvitationNotFoundError", "InvitationSchema", "InvitationStatus",
-    "ProactiveCheckRequest", "ProactiveCheckResponse", "ProactiveRepository",
-    "ProactiveRespondRequest", "ProactiveRespondResponse", "ProactiveService",
+    "InvitationConflictError",
+    "InvitationDecision",
+    "InvitationKind",
+    "InvitationNotFoundError",
+    "InvitationSchema",
+    "InvitationStatus",
+    "ProactiveCheckRequest",
+    "ProactiveCheckResponse",
+    "ProactiveRepository",
+    "PracticeFinalizeRequest",
+    "PracticeOutcome",
+    "ProactiveRespondRequest",
+    "ProactiveRespondResponse",
+    "ProactiveService",
 ]

@@ -34,6 +34,8 @@ from companion.memory import (
 from companion.proactive import (
     InvitationConflictError,
     InvitationNotFoundError,
+    InvitationSchema,
+    PracticeFinalizeRequest,
     ProactiveCheckRequest,
     ProactiveCheckResponse,
     ProactiveRespondRequest,
@@ -85,6 +87,35 @@ async def respond_proactive(
         raise HTTPException(status_code=404, detail="Invitation not found") from exc
     except InvitationConflictError as exc:
         raise HTTPException(status_code=409, detail="Invitation is no longer pending") from exc
+
+
+@router.post("/v1/proactive/invitations/{invitation_id}/practice/complete")
+async def complete_proactive_practice(
+    invitation_id: str,
+    request: PracticeFinalizeRequest,
+    service: ProactiveService = ProactiveDependency,
+) -> InvitationSchema:
+    try:
+        return service.finalize_practice(invitation_id, **request.model_dump())
+    except InvitationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Invitation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InvitationConflictError as exc:
+        raise HTTPException(status_code=409, detail="Practice is already terminal") from exc
+
+
+@router.post("/v1/proactive/invitations/{invitation_id}/practice/abandon")
+async def abandon_proactive_practice(
+    invitation_id: str,
+    service: ProactiveService = ProactiveDependency,
+) -> InvitationSchema:
+    try:
+        return service.abandon_practice(invitation_id)
+    except InvitationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Invitation not found") from exc
+    except InvitationConflictError as exc:
+        raise HTTPException(status_code=409, detail="Practice is already terminal") from exc
 
 
 @router.get("/health")
