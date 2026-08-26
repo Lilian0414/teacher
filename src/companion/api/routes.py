@@ -84,11 +84,13 @@ async def respond_proactive(
     service: ProactiveService = ProactiveDependency,
 ) -> ProactiveRespondResponse:
     try:
-        return service.respond(invitation_id, request.decision)
+        return service.respond(invitation_id, request.decision, request.conversation_id)
     except InvitationNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Invitation not found") from exc
     except InvitationConflictError as exc:
         raise HTTPException(status_code=409, detail="Invitation is no longer pending") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/v1/proactive/invitations/{invitation_id}/practice/complete")

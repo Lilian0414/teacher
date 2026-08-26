@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import uuid4
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session
 
 from companion.persistence.models import (
@@ -23,6 +23,30 @@ class ProactiveRepository:
             select(ProactiveInvitation)
             .where(ProactiveInvitation.user_id == user_id, ProactiveInvitation.status == "pending")
             .order_by(ProactiveInvitation.created_at.desc())
+        )
+
+    def accepted_conversation(self, user_id: str) -> ProactiveInvitation | None:
+        return self._session.scalar(
+            select(ProactiveInvitation)
+            .where(
+                ProactiveInvitation.user_id == user_id,
+                ProactiveInvitation.kind == InvitationKind.CONVERSATION.value,
+                ProactiveInvitation.status == InvitationStatus.ACCEPTED.value,
+            )
+            .order_by(ProactiveInvitation.responded_at.asc())
+        )
+
+    def accepted_conversations(self, user_id: str) -> list[ProactiveInvitation]:
+        return list(
+            self._session.scalars(
+                select(ProactiveInvitation)
+                .where(
+                    ProactiveInvitation.user_id == user_id,
+                    ProactiveInvitation.kind == InvitationKind.CONVERSATION.value,
+                    ProactiveInvitation.status == InvitationStatus.ACCEPTED.value,
+                )
+                .order_by(ProactiveInvitation.responded_at.asc())
+            )
         )
 
     def get(self, invitation_id: str, user_id: str) -> ProactiveInvitation | None:
@@ -89,7 +113,16 @@ class ProactiveRepository:
         status: InvitationStatus,
         now: datetime,
         suppress_until: datetime | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
+        if conversation_id is not None:
+            conversation = self._session.scalar(
+                select(Conversation).where(
+                    Conversation.id == conversation_id, Conversation.user_id == row.user_id
+                )
+            )
+            if conversation is None:
+                raise ValueError("conversation_id must belong to the current user")
         result = self._session.execute(
             update(ProactiveInvitation)
             .where(
@@ -100,6 +133,7 @@ class ProactiveRepository:
                 status=status.value,
                 responded_at=encode_dt(now),
                 suppress_until=encode_dt(suppress_until) if suppress_until else None,
+                conversation_id=conversation_id,
             )
         )
         self._session.commit()
@@ -107,6 +141,31 @@ class ProactiveRepository:
             self._session.refresh(row)
             return True
         return False
+
+    def messages_at_or_after(
+        self, *, conversation_id: str, boundary: datetime
+    ) -> list[Message]:
+        return list(
+            self._session.scalars(
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    Message.created_at >= encode_dt(boundary),
+                )
+                .order_by(
+                    Message.created_at.asc(),
+                    case((Message.role == "user", 0), else_=1),
+                    Message.id.asc(),
+                )
+            )
+        )
+
+    def conversation_belongs_to(self, conversation_id: str, user_id: str) -> bool:
+        return self._session.scalar(
+            select(Conversation.id).where(
+                Conversation.id == conversation_id, Conversation.user_id == user_id
+            )
+        ) is not None
 
     def validated_practice_evidence(
         self,

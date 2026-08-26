@@ -45,6 +45,8 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
                     }
                 },
             )
+        if request.url.path == "/v1/conversations":
+            return httpx.Response(200, json={"id": "conversation-1"})
         if request.url.path.endswith("/respond"):
             return httpx.Response(
                 200,
@@ -69,7 +71,11 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
     assert terminal._pending_invitation is not None
     await terminal._respond_to_invitation("start")
     assert terminal._mode == InteractionMode.PRACTICE_PROMPT
-    assert requests == ["/v1/proactive/check", "/v1/proactive/invitations/invite-1/respond"]
+    assert requests == [
+        "/v1/proactive/check",
+        "/v1/conversations",
+        "/v1/proactive/invitations/invite-1/respond",
+    ]
     await terminal._client.aclose()
 
 
@@ -329,6 +335,105 @@ async def test_skip_practice_persists_abandonment_before_resetting_ui() -> None:
     assert terminal._active_practice_invitation_id is None
     assert "Practice skipped." in terminal._messages.values
     await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_retry", [False, True])
+async def test_quit_abandons_incomplete_practice_before_ending_conversation(
+    with_retry: bool,
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/practice/abandon"):
+            return httpx.Response(200, json={"status": "abandoned", "outcome": "abandoned"})
+        if request.url.path.endswith("/end"):
+            return httpx.Response(200, json={"conversation": {"ended_at": "now"}})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+    if with_retry:
+        terminal._pending_assistant_retry = {
+            "conversation_id": "conversation-1",
+            "user_message_id": "saved-user",
+            "invitation_id": "invite-1",
+        }
+    exited: list[bool] = []
+    terminal.exit = lambda *args, **kwargs: exited.append(True)  # type: ignore[method-assign]
+
+    await terminal.action_quit()
+
+    assert requests == [
+        "/v1/proactive/invitations/invite-1/practice/abandon",
+        "/v1/conversations/conversation-1/end",
+    ]
+    assert terminal._active_practice_invitation_id is None
+    assert terminal._pending_assistant_retry is None
+    assert exited == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 503])
+async def test_quit_finalizes_pending_evidence_and_stays_open_if_core_cannot_resolve(
+    status: int,
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/practice/complete"):
+            return httpx.Response(
+                status,
+                json=(
+                    {"status": "completed", "outcome": "completed_not_evaluated"}
+                    if status == 200
+                    else {"detail": "offline"}
+                ),
+            )
+        if request.url.path.endswith("/end"):
+            return httpx.Response(200, json={"conversation": {"ended_at": "now"}})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._pending_practice_completion = {
+        "invitation_id": "invite-1",
+        "conversation_id": "conversation-1",
+        "user_message_id": "user-1",
+        "assistant_message_id": "assistant-1",
+    }
+    exited: list[bool] = []
+    terminal.exit = lambda *args, **kwargs: exited.append(True)  # type: ignore[method-assign]
+
+    await terminal.action_quit()
+
+    if status == 200:
+        assert requests == [
+            "/v1/proactive/invitations/invite-1/practice/complete",
+            "/v1/conversations/conversation-1/end",
+        ]
+        assert terminal._pending_practice_completion is None
+        assert exited == [True]
+    else:
+        assert requests == ["/v1/proactive/invitations/invite-1/practice/complete"]
+        assert terminal._pending_practice_completion is not None
+        assert terminal._active_practice_invitation_id == "invite-1"
+        assert exited == []
+        assert "quit cancelled" in cast(MessageSink, terminal._messages).values[-1]
+        await terminal._client.aclose()
 
 
 @pytest.mark.asyncio
