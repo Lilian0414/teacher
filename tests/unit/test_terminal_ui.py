@@ -118,6 +118,72 @@ async def test_practice_chat_is_finalized_once_with_returned_message_ids() -> No
 
 
 @pytest.mark.asyncio
+async def test_practice_finalization_retry_does_not_resend_chat() -> None:
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+    completion_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal completion_attempts
+        payload = __import__("json").loads(request.content) if request.content else None
+        requests.append((request.url.path, payload))
+        if request.url.path == "/v1/conversations/conversation-1/messages":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "user-1"},
+                    "assistant_message": {"id": "assistant-1", "content": "Nice answer."},
+                },
+            )
+        if request.url.path.endswith("/practice/complete"):
+            completion_attempts += 1
+            if completion_attempts == 1:
+                return httpx.Response(503, json={"detail": "Try again"})
+            return httpx.Response(200, json={"outcome": "completed_not_evaluated"})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await terminal._send_chat_message("My weekend was restful.")
+
+    assert_mode(terminal, InteractionMode.PRACTICE_PROMPT)
+    assert terminal._active_practice_invitation_id == "invite-1"
+    assert terminal._pending_practice_completion is not None
+
+    await terminal._send_chat_message("This input must not become another message.")
+
+    message_requests = [request for request in requests if request[0].endswith("/messages")]
+    completion_requests = [
+        request for request in requests if request[0].endswith("/practice/complete")
+    ]
+    assert len(message_requests) == 1
+    assert [payload for _, payload in completion_requests] == [
+        {
+            "conversation_id": "conversation-1",
+            "user_message_id": "user-1",
+            "assistant_message_id": "assistant-1",
+        },
+        {
+            "conversation_id": "conversation-1",
+            "user_message_id": "user-1",
+            "assistant_message_id": "assistant-1",
+        },
+    ]
+    assert_mode(terminal, InteractionMode.NORMAL)
+    assert terminal._active_practice_invitation_id is None
+    assert terminal._pending_practice_completion is None
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_skip_practice_persists_abandonment_before_resetting_ui() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/practice/abandon")

@@ -107,6 +107,7 @@ class CompanionTerminal(App[None]):
         self._due_review_count = 0
         self._pending_invitation: dict[str, Any] | None = None
         self._active_practice_invitation_id: str | None = None
+        self._pending_practice_completion: dict[str, str] | None = None
         self._last_activity = time.monotonic()
 
     def compose(self) -> ComposeResult:
@@ -329,6 +330,8 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             return [None, None, ("Stop review", "cancel_intent")]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
+            if self._pending_practice_completion is not None:
+                return [None, None, ("Retry completion", "cancel_intent")]
             return [None, None, ("Skip practice", "cancel_intent")]
         return [
             ("Help me say it", "help_intent"),
@@ -518,6 +521,9 @@ class CompanionTerminal(App[None]):
             self._reset_to_normal()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
+        if self._pending_practice_completion is not None:
+            await self._finalize_practice()
+            return
         await self.ensure_conversation()
         if self._conversation_id is None:
             self._messages.write("[system] No active conversation.")
@@ -545,26 +551,44 @@ class CompanionTerminal(App[None]):
                 or not isinstance(assistant, dict)
             ):
                 raise ValueError("Invalid practice message response")
-            completion = await self._client.post(
-                f"/v1/proactive/invitations/{invitation_id}/practice/complete",
-                json={
-                    "conversation_id": self._conversation_id,
-                    "user_message_id": user_message["id"],
-                    "assistant_message_id": assistant["id"],
-                },
+            self._pending_practice_completion = {
+                "invitation_id": invitation_id,
+                "conversation_id": self._conversation_id,
+                "user_message_id": str(user_message["id"]),
+                "assistant_message_id": str(assistant["id"]),
+            }
+            self._input.placeholder = "Practice sent — retry completion if needed..."
+            self._after_mode_change()
+            await self._finalize_practice()
+
+    async def _finalize_practice(self) -> None:
+        evidence = self._pending_practice_completion
+        if evidence is None:
+            raise ValueError("No practice completion is pending")
+        completion = await self._client.post(
+            f"/v1/proactive/invitations/{evidence['invitation_id']}/practice/complete",
+            json={
+                "conversation_id": evidence["conversation_id"],
+                "user_message_id": evidence["user_message_id"],
+                "assistant_message_id": evidence["assistant_message_id"],
+            },
+        )
+        completion.raise_for_status()
+        outcome = completion.json().get("outcome")
+        if outcome == "learning_signal_captured":
+            self._messages.write(
+                "Practice complete. A useful learning point was saved for review."
             )
-            completion.raise_for_status()
-            outcome = completion.json().get("outcome")
-            if outcome == "learning_signal_captured":
-                self._messages.write(
-                    "Practice complete. A useful learning point was saved for review."
-                )
-            else:
-                self._messages.write("Practice complete. This conversation was not graded.")
-            self._active_practice_invitation_id = None
-            self._reset_to_normal()
+        else:
+            self._messages.write("Practice complete. This conversation was not graded.")
+        self._pending_practice_completion = None
+        self._active_practice_invitation_id = None
+        self._reset_to_normal()
 
     async def _abandon_practice(self) -> None:
+        if self._pending_practice_completion is not None:
+            await self._finalize_practice()
+            return
         invitation_id = self._active_practice_invitation_id
         if invitation_id is None:
             raise ValueError("No active practice invitation")
