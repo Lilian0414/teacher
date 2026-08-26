@@ -19,6 +19,7 @@ from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryServi
 from companion.memory.schemas import MemoryAnalysis, MemoryCategory
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
+from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest, LanguageHelpResponse
 from tests.support import RecordingLLMProvider
 
 
@@ -85,6 +86,40 @@ def test_help_capture_review_progression_and_duplicate_submission() -> None:
     assert duplicate.status_code == 409
     assert no_due == {"question": None, "complete": True}
     assert len(repository.attempts_for(item_id)) == 1
+
+
+def test_help_and_hint_same_prompt_remain_distinct_through_api() -> None:
+    client, provider, repository, _ = make_m3_client()
+
+    async def tired_language_help(request: LanguageHelpRequest) -> LanguageHelpResponse:
+        provider.language_requests.append(request)
+        if request.mode == LanguageHelpMode.HELP:
+            return LanguageHelpResponse(natural_expression="I am tired today.")
+        if request.mode == LanguageHelpMode.HINT:
+            return LanguageHelpResponse(hints=["tired", "exhausted"])
+        raise AssertionError(f"Unsupported mode: {request.mode}")
+
+    provider.provide_language_help = tired_language_help  # type: ignore[method-assign]
+    with client:
+        expression = client.post(
+            "/v1/commands/execute", json={"raw": "/help 我今天很累"}
+        ).json()["learning_item"]
+        phrase = client.post(
+            "/v1/commands/execute", json={"raw": "/hint 我今天很累"}
+        ).json()["learning_item"]
+        repeated = client.post(
+            "/v1/commands/execute", json={"raw": "/hint 我今天很累"}
+        ).json()["learning_item"]
+        graded = client.post(
+            f"/v1/review/{expression['id']}/answer", json={"answer": "tired"}
+        ).json()["result"]
+
+    assert expression["id"] != phrase["id"]
+    assert repeated["id"] == phrase["id"]
+    assert expression["accepted_answers"] == ["I am tired today."]
+    assert phrase["accepted_answers"] == ["tired", "exhausted"]
+    assert graded["correct"] is False
+    assert repository.attempts_for(phrase["id"]) == []
 
 
 def test_due_order_resume_and_say_exclusion() -> None:

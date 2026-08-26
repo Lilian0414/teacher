@@ -34,6 +34,7 @@ The system SHALL maintain at most one active learning item for the same user, no
 and learning kind. Repeated assistance SHALL merge newly returned accepted answers into that item,
 record the latest source command, and make the item due no later than the current time. Learning
 items and attempts SHALL remain available after application restart.
+Accepted answers and review scheduling state SHALL belong only to that kind-specific item.
 
 #### Scenario: Repeated assistance updates rather than duplicates
 - **WHEN** the same user requests reviewable assistance again for an equivalent prompt and learning kind after case, whitespace, and terminal punctuation normalization
@@ -41,7 +42,11 @@ items and attempts SHALL remain available after application restart.
 
 #### Scenario: Different kinds remain distinct
 - **WHEN** the same normalized prompt produces a full-expression item through `/help` and a phrase item through `/hint`
-- **THEN** the system retains one item for each learning kind
+- **THEN** the system retains one item for each learning kind with isolated accepted answers, attempts, stage, and next-review time
+
+#### Scenario: Legacy item identity is expanded without invented history
+- **WHEN** a database with prompt-only uniqueness is migrated to kind-aware identity
+- **THEN** each existing item keeps its identifier, stored kind, accepted answers, attempts, occurrences, stage, and next-review time, and a later capture of another kind creates a separate item without retroactively splitting the legacy item
 
 #### Scenario: Restart preserves learning state
 - **WHEN** the application restarts after learning items or attempts have been committed
