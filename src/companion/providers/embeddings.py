@@ -6,9 +6,12 @@ import httpx
 
 
 class EmbeddingProvider(Protocol):
-    """Provider-neutral boundary for generating one text embedding."""
+    """Async provider-neutral boundary for generating text embeddings."""
 
-    def embed(self, text: str) -> Sequence[float]:
+    async def embed(self, text: str) -> Sequence[float]:
+        ...
+
+    async def embed_many(self, texts: Sequence[str]) -> list[Sequence[float]]:
         ...
 
     @property
@@ -19,7 +22,7 @@ class EmbeddingProvider(Protocol):
 
 
 class OpenAIEmbeddingProvider:
-    """Synchronous OpenAI-compatible embedding client (including local servers)."""
+    """Async OpenAI-compatible embedding client (including local servers)."""
 
     def __init__(
         self,
@@ -44,20 +47,32 @@ class OpenAIEmbeddingProvider:
     def dimensions(self) -> int:
         return self._dimensions
 
-    def embed(self, text: str) -> Sequence[float]:
+    async def embed(self, text: str) -> Sequence[float]:
+        return (await self.embed_many([text]))[0]
+
+    async def embed_many(self, texts: Sequence[str]) -> list[Sequence[float]]:
+        if not texts:
+            return []
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        payload = {"input": text, "model": self._model, "dimensions": self._dimensions}
-        with httpx.Client(timeout=self._timeout_seconds) as client:
-            response = client.post(f"{self._base_url}/embeddings", json=payload, headers=headers)
+        payload = {"input": list(texts), "model": self._model, "dimensions": self._dimensions}
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            response = await client.post(
+                f"{self._base_url}/embeddings", json=payload, headers=headers
+            )
         response.raise_for_status()
         data = response.json()
-        vector = data["data"][0]["embedding"]
-        normalized = normalize_embedding(vector)
-        if normalized is None or len(normalized) != self._dimensions:
-            raise ValueError(
-                f"Embedding model '{self._model}' returned an incompatible dimension"
-            )
-        return normalized
+        items = sorted(data["data"], key=lambda item: item.get("index", 0))
+        if len(items) != len(texts):
+            raise ValueError(f"Embedding model '{self._model}' returned an incomplete batch")
+        vectors: list[Sequence[float]] = []
+        for item in items:
+            normalized = normalize_embedding(item["embedding"])
+            if normalized is None or len(normalized) != self._dimensions:
+                raise ValueError(
+                    f"Embedding model '{self._model}' returned an incompatible dimension"
+                )
+            vectors.append(normalized)
+        return vectors
 
 
 def normalize_embedding(values: Sequence[float]) -> list[float] | None:

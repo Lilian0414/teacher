@@ -103,7 +103,6 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
                 memory_repository,
                 limit=settings.memory_context_limit,
                 embedding_provider=embedding_provider,
-                backfill_limit=settings.embedding_backfill_limit,
             ),
             learning_context_builder=LearningContextBuilder(
                 LearningRepository(session),
