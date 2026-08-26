@@ -72,8 +72,12 @@ SHALL atomically resolve the pending invitation and persist the resulting suppre
 - **THEN** Core resolves the stale invitation without creating an attempt and reports that review is complete
 
 #### Scenario: Starting conversation practice returns a local prompt
-- **WHEN** the user starts a pending conversation invitation
-- **THEN** Core marks it accepted and returns its persisted deterministic English starter prompt without calling the LLM
+- **WHEN** the user starts a pending conversation invitation with an active conversation owned by the configured user
+- **THEN** Core atomically marks it accepted, binds that conversation identifier, and returns its persisted deterministic English starter prompt without calling the LLM
+
+#### Scenario: Conversation start requires an owned conversation
+- **WHEN** the user starts a pending conversation invitation without a conversation identifier or with another user's conversation
+- **THEN** Core rejects the request without changing the invitation from pending
 
 #### Scenario: Snoozing records a suppression boundary
 - **WHEN** the user snoozes a pending invitation
@@ -105,6 +109,51 @@ item, or life memory, and an LLM request SHALL occur only after the user submits
 - **WHEN** a deterministic conversation starter is delivered or accepted
 - **THEN** the starter itself is not inserted into conversation user messages, learning items, or long-term memories
 
+### Requirement: Accepted conversation practice is crash-safe
+Conversation practice SHALL follow `pending -> accepted -> completed | abandoned`, while snooze
+and same-day dismissal remain the existing suppression branches. An accepted invitation SHALL
+prevent another conversation invitation for that user. Before a new conversation session proceeds,
+Core SHALL reconcile each stale accepted invitation using only durable messages in its bound
+conversation created at or after its acceptance boundary. Exactly one ordered user and assistant
+pair SHALL be finalized through the normal practice finalization path; missing, partial, invalid, or
+ambiguous evidence SHALL be abandoned and SHALL NOT create a learning occurrence. Reconciliation
+and terminal transitions SHALL be idempotent.
+
+#### Scenario: Restart finalizes one attributable turn
+- **WHEN** restart reconciliation finds exactly one user message followed by one assistant message in the bound conversation at or after acceptance
+- **THEN** Core completes the invitation through normal finalization with those exact evidence identifiers and does not duplicate the result on another reconciliation
+
+#### Scenario: Restart abandons absent or partial evidence
+- **WHEN** restart reconciliation finds no post-acceptance answer or only a durable user message
+- **THEN** Core marks the invitation abandoned without creating a learning occurrence
+
+#### Scenario: Restart never guesses ambiguous evidence
+- **WHEN** restart reconciliation finds multiple possible post-acceptance turns or an invalid conversation binding
+- **THEN** Core marks the invitation abandoned without selecting evidence or creating a learning occurrence
+
+#### Scenario: Accepted practice blocks another invitation
+- **WHEN** an accepted conversation invitation has not yet reached completed or abandoned
+- **THEN** an eligibility check creates and returns no second conversation invitation for that user
+
+### Requirement: Graceful quit resolves active conversation practice
+Before ending the conversation or exiting, the terminal SHALL finalize complete pending practice
+evidence through Core, or abandon incomplete practice including a pending assistant retry. It SHALL
+continue conversation end and memory extraction only after Core confirms a terminal invitation. If
+Core cannot confirm completion or abandonment, the terminal SHALL remain open with a recoverable
+system message.
+
+#### Scenario: Quit finalizes complete pending evidence
+- **WHEN** the user quits with one complete practice user and assistant pair pending finalization
+- **THEN** the terminal finalizes those exact identifiers once before ending the conversation
+
+#### Scenario: Quit abandons incomplete or retryable practice
+- **WHEN** the user quits before answering or while an assistant reply retry is pending
+- **THEN** the terminal abandons the invitation without resending the user message and then ends the conversation normally
+
+#### Scenario: Quit remains open when resolution fails
+- **WHEN** Core cannot confirm that active practice is completed or abandoned
+- **THEN** the terminal reports a recoverable system error and does not silently exit
+
 ### Requirement: Terminal presents invitations without interrupting active work
 While running, the terminal SHALL periodically ask Core for invitation eligibility and render a
 returned invitation as a distinct non-conversation card with Start, Later, and Not today actions.
@@ -130,4 +179,3 @@ help or hint flow, or in-flight request.
 #### Scenario: Core failure does not break the terminal
 - **WHEN** an invitation check or decision request fails
 - **THEN** the terminal keeps the current conversation and interaction state usable and shows at most a controlled system error
-

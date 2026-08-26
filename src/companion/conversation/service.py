@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from companion.clock import Clock, system_clock
@@ -58,6 +59,7 @@ class ConversationService:
         memory_context_builder: MemoryContextBuilder | None = None,
         learning_context_builder: LearningContextBuilder | None = None,
         learning_service: LearningService | None = None,
+        practice_reconciler: Callable[[], object] | None = None,
     ) -> None:
         self._repository = repository
         self._llm_provider = llm_provider
@@ -67,6 +69,7 @@ class ConversationService:
         self._memory_context_builder = memory_context_builder
         self._learning_context_builder = learning_context_builder
         self._learning_service = learning_service
+        self._practice_reconciler = practice_reconciler
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -91,6 +94,8 @@ class ConversationService:
         return self._conversation_schema(conversation, messages)
 
     def recover_interrupted_conversations(self) -> list[ConversationSchema]:
+        if self._practice_reconciler is not None:
+            self._practice_reconciler()
         recovered: list[ConversationSchema] = []
         for conversation in self._repository.list_recoverable(user_id=self._user_id):
             if conversation.ended_at is None:

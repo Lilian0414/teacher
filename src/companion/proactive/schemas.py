@@ -60,6 +60,7 @@ class ProactiveCheckResponse(BaseModel):
 
 class ProactiveRespondRequest(BaseModel):
     decision: InvitationDecision
+    conversation_id: str | None = None
 
 
 class ProactiveRespondResponse(BaseModel):

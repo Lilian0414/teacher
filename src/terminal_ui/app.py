@@ -443,9 +443,15 @@ class CompanionTerminal(App[None]):
         invitation = self._pending_invitation
         if invitation is None:
             return
+        request: dict[str, str] = {"decision": decision}
+        if decision == "start" and invitation.get("kind") == "conversation":
+            await self.ensure_conversation()
+            if self._conversation_id is None:
+                return
+            request["conversation_id"] = self._conversation_id
         response = await self._client.post(
             f"/v1/proactive/invitations/{invitation['id']}/respond",
-            json={"decision": decision},
+            json=request,
         )
         response.raise_for_status()
         payload = cast(dict[str, Any], response.json())
@@ -704,6 +710,20 @@ class CompanionTerminal(App[None]):
             return None
 
     async def action_quit(self) -> None:
+        if self._active_practice_invitation_id is not None:
+            try:
+                if self._pending_practice_completion is not None:
+                    await self._finalize_practice()
+                else:
+                    await self._abandon_practice()
+                if self._active_practice_invitation_id is not None:
+                    raise ValueError("Practice did not reach a terminal state")
+                self._pending_assistant_retry = None
+            except (httpx.HTTPError, ValueError) as exc:
+                self._messages.write(
+                    f"[system] Could not resolve active practice; quit cancelled: {exc}"
+                )
+                return
         if self._conversation_id is not None:
             try:
                 response = await self._client.post(f"/v1/conversations/{self._conversation_id}/end")
@@ -715,8 +735,9 @@ class CompanionTerminal(App[None]):
                         "[system] Memory extraction failed. Quit again to retry safely."
                     )
                     return
-            except httpx.HTTPError:
-                pass
+            except httpx.HTTPError as exc:
+                self._messages.write(f"[system] Could not end conversation; quit cancelled: {exc}")
+                return
         await self._client.aclose()
         self.exit()
 

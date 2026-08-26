@@ -96,6 +96,16 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
     for session in get_session():
         settings = get_settings()
         memory_repository = MemoryRepository(session)
+        learning_service = LearningService(
+            repository=LearningRepository(session),
+            user_id=settings.user_id,
+        )
+        proactive_service = ProactiveService(
+            repository=ProactiveRepository(session),
+            availability=build_availability_service(session),
+            learning=learning_service,
+            settings=settings,
+        )
         yield ConversationService(
             repository=ConversationRepository(session),
             llm_provider=provider,
@@ -111,10 +121,8 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
                 user_id=settings.user_id,
                 limit=settings.learning_context_limit,
             ),
-            learning_service=LearningService(
-                repository=LearningRepository(session),
-                user_id=settings.user_id,
-            ),
+            learning_service=learning_service,
+            practice_reconciler=proactive_service.reconcile_accepted_practices,
         )
 
 

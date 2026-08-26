@@ -51,6 +51,8 @@ class ProactiveService:
             or self._availability.snapshot().state != AvailabilityState.AVAILABLE
         ):
             return None
+        if self._repository.accepted_conversation(self._settings.user_id) is not None:
+            return None
         pending = self._repository.pending(self._settings.user_id)
         if pending is not None:
             return self._schema(pending)
@@ -88,13 +90,24 @@ class ProactiveService:
             )
         )
 
-    def respond(self, invitation_id: str, decision: InvitationDecision) -> ProactiveRespondResponse:
+    def respond(
+        self,
+        invitation_id: str,
+        decision: InvitationDecision,
+        conversation_id: str | None = None,
+    ) -> ProactiveRespondResponse:
         row = self._repository.get(invitation_id, self._settings.user_id)
         if row is None:
             raise InvitationNotFoundError(invitation_id)
         if row.status != InvitationStatus.PENDING.value:
             raise InvitationConflictError(invitation_id)
         now = self._now()
+        if (
+            decision == InvitationDecision.START
+            and row.kind == InvitationKind.CONVERSATION.value
+            and conversation_id is None
+        ):
+            raise ValueError("conversation_id is required to start conversation practice")
         status = InvitationStatus.ACCEPTED
         boundary = now + timedelta(minutes=self._settings.proactive_accept_cooldown_minutes)
         if decision == InvitationDecision.SNOOZE:
@@ -103,7 +116,18 @@ class ProactiveService:
         elif decision == InvitationDecision.DISMISS_TODAY:
             status = InvitationStatus.DISMISSED
             boundary = datetime.combine(now.date() + timedelta(days=1), time(), tzinfo=now.tzinfo)
-        if not self._repository.resolve(row, status=status, now=now, suppress_until=boundary):
+        if not self._repository.resolve(
+            row,
+            status=status,
+            now=now,
+            suppress_until=boundary,
+            conversation_id=(
+                conversation_id
+                if decision == InvitationDecision.START
+                and row.kind == InvitationKind.CONVERSATION.value
+                else None
+            ),
+        ):
             raise InvitationConflictError(invitation_id)
         schema = self._schema(row)
         if decision != InvitationDecision.START:
@@ -133,6 +157,8 @@ class ProactiveService:
             ):
                 return self._schema(row)
             raise InvitationConflictError(invitation_id)
+        if row.conversation_id != conversation_id:
+            raise ValueError("Practice evidence does not belong to the bound conversation")
         occurrence = self._repository.validated_practice_evidence(
             user_id=self._settings.user_id,
             conversation_id=conversation_id,
@@ -166,9 +192,43 @@ class ProactiveService:
             status=InvitationStatus.ABANDONED,
             outcome=PracticeOutcome.ABANDONED.value,
             now=self._now(),
+            conversation_id=row.conversation_id,
         ):
             raise InvitationConflictError(invitation_id)
         return self._schema(row)
+
+    def reconcile_accepted_practices(self) -> list[InvitationSchema]:
+        """Resolve stale accepted practice using only one exact post-acceptance turn."""
+        resolved: list[InvitationSchema] = []
+        for row in self._repository.accepted_conversations(self._settings.user_id):
+            messages = []
+            if (
+                row.conversation_id is not None
+                and row.responded_at is not None
+                and self._repository.conversation_belongs_to(
+                    row.conversation_id, self._settings.user_id
+                )
+            ):
+                messages = self._repository.messages_at_or_after(
+                    conversation_id=row.conversation_id,
+                    boundary=decode_dt(row.responded_at),
+                )
+            if (
+                len(messages) == 2
+                and messages[0].role == "user"
+                and messages[1].role == "assistant"
+            ):
+                resolved.append(
+                    self.finalize_practice(
+                        row.id,
+                        conversation_id=row.conversation_id or "",
+                        user_message_id=messages[0].id,
+                        assistant_message_id=messages[1].id,
+                    )
+                )
+            else:
+                resolved.append(self.abandon_practice(row.id))
+        return resolved
 
     def _practice_invitation(self, invitation_id: str) -> ProactiveInvitation:
         row = self._repository.get(invitation_id, self._settings.user_id)
