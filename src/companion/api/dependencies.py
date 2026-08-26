@@ -4,20 +4,22 @@ from functools import lru_cache
 from sqlalchemy.orm import Session
 
 from companion.availability import AvailabilityService
-from companion.conversation import ConversationRepository, ConversationService
-from companion.learning import LearningContextBuilder, LearningRepository, LearningService
-from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryService
+from companion.conversation.repository import ConversationRepository
+from companion.conversation.service import ConversationService
+from companion.learning.context import LearningContextBuilder
+from companion.learning.repository import LearningRepository
+from companion.learning.service import LearningService
+from companion.memory.context import MemoryContextBuilder
+from companion.memory.repository import MemoryRepository
+from companion.memory.service import MemoryService
 from companion.persistence.database import get_session
 from companion.persistence.repositories import AvailabilityRepository
 from companion.proactive import ProactiveRepository, ProactiveService
-from companion.providers import (
-    EmbeddingProvider,
-    FakeLLMProvider,
-    GroqLLMProvider,
-    LLMProvider,
-    OpenAIEmbeddingProvider,
-)
+from companion.providers.embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from companion.providers.errors import LLMConfigurationError
+from companion.providers.fake import FakeLLMProvider
+from companion.providers.groq import GroqLLMProvider
+from companion.providers.protocols import LLMProvider
 from companion.schemas.availability import LLMStatus
 from companion.settings import get_settings
 
