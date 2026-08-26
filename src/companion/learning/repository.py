@@ -35,6 +35,7 @@ class LearningRepository:
             select(LearningItem).where(
                 LearningItem.user_id == user_id,
                 LearningItem.normalized_prompt == normalized_prompt,
+                LearningItem.kind == kind.value,
             )
         ).one_or_none()
         encoded_now = encode_dt(now)
@@ -57,10 +58,6 @@ class LearningRepository:
             item.prompt = prompt.strip()
             item.accepted_answers = json.dumps(merge_answers(self.answers(item), accepted_answers))
             item.source_command = source_command
-            # Kind is presentation metadata, not part of learning-goal identity.
-            # Prefer expression when a complete Help answer has been captured.
-            if kind == LearningKind.EXPRESSION:
-                item.kind = kind.value
             item.next_review_at = min(item.next_review_at, encoded_now)
             item.updated_at = encoded_now
         if commit:

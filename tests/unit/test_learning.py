@@ -48,44 +48,48 @@ def test_normalization_and_repeated_capture_merge_without_duplicate() -> None:
     assert len(repository.due_items(user_id="default", now=current[0])) == 1
 
 
-def test_help_then_hint_share_one_goal_and_review_progress_advances() -> None:
-    repository, service, _ = make_learning()
+def test_help_and_hint_have_isolated_answers_and_review_progress() -> None:
+    repository, service, current = make_learning()
     first = service.capture_assistance(
         mode=LanguageHelpMode.HELP,
-        prompt="你好",
-        response=LanguageHelpResponse(natural_expression="Hello"),
+        prompt="我今天很累",
+        response=LanguageHelpResponse(natural_expression="I am tired today."),
     )
     second = service.capture_assistance(
         mode=LanguageHelpMode.HINT,
-        prompt=" 你好！ ",
-        response=LanguageHelpResponse(hints=["Hi", "Hello"]),
+        prompt=" 我今天很累！ ",
+        response=LanguageHelpResponse(hints=["tired", "exhausted"]),
     )
-    other = service.capture_assistance(
-        mode=LanguageHelpMode.HELP,
-        prompt="再見",
-        response=LanguageHelpResponse(natural_expression="Goodbye"),
-    )
-
-    assert first is not None and second is not None and other is not None
-    assert first.id == second.id
-    assert second.accepted_answers == ["Hello", "Hi"]
+    assert first is not None and second is not None
+    assert first.id != second.id
+    assert first.accepted_answers == ["I am tired today."]
+    assert second.accepted_answers == ["tired", "exhausted"]
     question = service.first_due()
     assert question is not None
     assert (question.position, question.total, question.remaining) == (1, 2, 2)
     stored = repository.get_item(question.id, user_id="default")
     assert stored is not None
     result = service.answer(
-        item_id=question.id,
-        answer=repository.answers(stored)[0],
+        item_id=first.id,
+        answer="tired",
         position=question.position,
         total=question.total,
     )
+    assert result.correct is False
+    assert result.stage == 0
     assert result.next_question is not None
     assert (
         result.next_question.position,
         result.next_question.total,
         result.next_question.remaining,
     ) == (2, 2, 1)
+    hint = repository.get_item(second.id, user_id="default")
+    expression = repository.get_item(first.id, user_id="default")
+    assert hint is not None and expression is not None
+    assert hint.stage == 0
+    assert expression.stage == 0
+    assert hint.next_review_at == current[0].isoformat()
+    assert expression.next_review_at == (current[0] + timedelta(days=1)).isoformat()
 
 
 def test_capture_rules_include_english_original_and_exclude_say_or_empty_chinese() -> None:

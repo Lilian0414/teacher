@@ -88,7 +88,12 @@ class Memory(Base):
 class LearningItem(Base):
     __tablename__ = "learning_items"
     __table_args__ = (
-        UniqueConstraint("user_id", "normalized_prompt"),
+        UniqueConstraint(
+            "user_id",
+            "normalized_prompt",
+            "kind",
+            name="uq_learning_items_user_prompt_kind",
+        ),
         Index("ix_learning_items_due", "user_id", "next_review_at", "created_at"),
     )
 
