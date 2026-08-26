@@ -135,6 +135,7 @@ def test_say_inserts_translation_and_assistant_reply() -> None:
     assert payload["inserted_into_conversation"] is True
     assert payload["inserted_text"] == "I had a difficult day at school."
     assert payload["assistant_message"]["role"] == "assistant"
+    assert payload["inserted_user_message"]["source"] == "say"
     assert [message["role"] for message in stored["conversation"]["messages"]] == [
         "user",
         "assistant",
