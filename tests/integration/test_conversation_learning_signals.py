@@ -42,7 +42,7 @@ def _candidate(
         source_assistant_message_id=assistant_id,
         kind=LearningKind.EXPRESSION,
         review_prompt="How can I say that today was exhausting?",
-        accepted_answers=["I had an exhausting day."],
+        accepted_answers=["I am exhausted."],
         reason=LearningSignalReason.USEFUL_EXPRESSION,
     )
 
@@ -87,9 +87,14 @@ async def test_completed_turn_creates_due_item_with_durable_provenance_and_is_id
         assert len(learning_repository.occurrences()) == 1
         assert learning.due_count() == 1
         item = learning_repository.due_items(user_id="default", now=now)[0]
-        assert learning_repository.answers(item) == ["I had an exhausting day."]
+        assert learning_repository.answers(item) == ["I am exhausted."]
         assert item.stage == 0
         assert item.next_review_at == now.isoformat()
+
+        review = learning.answer(item_id=item.id, answer="I'm exhausted.")
+        assert review.correct is True
+        assert review.stage == 1
+        assert len(learning_repository.attempts_for(item.id)) == 1
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from companion.learning import (
     LearningRepository,
     LearningService,
 )
+from companion.learning.grading import AnswerGradingPolicy
 from companion.learning.normalization import normalize_learning_text
 from companion.persistence.database import Base, make_engine
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse
@@ -125,12 +127,74 @@ def test_review_grading_schedule_and_stale_answer_protection() -> None:
     assert len(repository.attempts_for(item.id)) == 1
     with pytest.raises(LearningItemNotDueError):
         service.answer(item_id=item.id, answer="worn out")
+    assert len(repository.attempts_for(item.id)) == 1
 
     current[0] += timedelta(days=1)
     incorrect = service.answer(item_id=item.id, answer="sleepy")
     assert incorrect.correct is False
     assert incorrect.stage == 0
     assert incorrect.next_review_at == current[0] + timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    ("accepted", "submitted"),
+    [("I am tired.", "I'm tired."), ("I'm tired.", "I am tired.")],
+)
+def test_safe_contraction_variants_advance_and_record_once(
+    accepted: str, submitted: str
+) -> None:
+    repository, service, current = make_learning()
+    item = service.capture_assistance(
+        mode=LanguageHelpMode.HELP,
+        prompt="累",
+        response=LanguageHelpResponse(natural_expression=accepted),
+    )
+    assert item is not None
+
+    result = service.answer(item_id=item.id, answer=submitted)
+
+    assert result.correct is True
+    assert result.stage == 1
+    assert result.next_review_at == current[0] + timedelta(days=1)
+    attempts = repository.attempts_for(item.id)
+    assert len(attempts) == 1
+    assert attempts[0].correct is True
+
+
+def test_grading_policy_preserves_exact_alternates_and_rejects_unsupported_forms() -> None:
+    policy = AnswerGradingPolicy()
+
+    assert policy.grade("  WORN   OUT! ", ["exhausted", "worn out"])
+    assert not policy.grade("He's finished.", ["He has finished."])
+    assert not policy.grade("I am sleepy.", ["I am tired."])
+
+
+def test_grading_failure_happens_before_learning_state_is_persisted() -> None:
+    class FailingPolicy(AnswerGradingPolicy):
+        def grade(self, submitted_answer: str, accepted_answers: Sequence[str]) -> bool:
+            raise RuntimeError("grading failed")
+
+    repository, _, current = make_learning()
+    service = LearningService(
+        repository=repository,
+        clock=lambda: current[0],
+        grading_policy=FailingPolicy(),
+    )
+    item = service.capture_assistance(
+        mode=LanguageHelpMode.HELP,
+        prompt="累",
+        response=LanguageHelpResponse(natural_expression="I am tired."),
+    )
+    assert item is not None
+
+    with pytest.raises(RuntimeError, match="grading failed"):
+        service.answer(item_id=item.id, answer="I'm tired.")
+
+    stored = repository.get_item(item.id, user_id="default")
+    assert stored is not None
+    assert stored.stage == 0
+    assert stored.next_review_at == current[0].isoformat()
+    assert repository.attempts_for(item.id) == []
 
 
 def test_interval_caps_at_thirty_days_and_context_is_bounded() -> None:

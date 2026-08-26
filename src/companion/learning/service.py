@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from companion.clock import Clock, system_clock
 from companion.learning.errors import LearningItemNotDueError, LearningItemNotFoundError
+from companion.learning.grading import AnswerGradingPolicy
 from companion.learning.normalization import normalize_learning_text
 from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
@@ -35,10 +36,12 @@ class LearningService:
         repository: LearningRepository,
         clock: Clock = system_clock,
         user_id: str = "default",
+        grading_policy: AnswerGradingPolicy | None = None,
     ) -> None:
         self._repository = repository
         self._clock = clock
         self._user_id = user_id
+        self._grading_policy = grading_policy or AnswerGradingPolicy()
 
     def capture_assistance(
         self,
@@ -124,10 +127,7 @@ class LearningService:
         if decode_dt(item.next_review_at) > now:
             raise LearningItemNotDueError(item_id)
         accepted = self._repository.answers(item)
-        normalized_answer = normalize_learning_text(answer)
-        correct = bool(normalized_answer) and any(
-            normalized_answer == normalize_learning_text(candidate) for candidate in accepted
-        )
+        correct = self._grading_policy.grade(answer, accepted)
         stage_after = item.stage + 1 if correct else 0
         interval_index = min(max(stage_after - 1, 0), len(REVIEW_INTERVAL_DAYS) - 1)
         next_review_at = now + timedelta(days=REVIEW_INTERVAL_DAYS[interval_index])
