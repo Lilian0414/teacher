@@ -4,7 +4,12 @@ from uuid import uuid4
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
-from companion.persistence.models import ProactiveInvitation
+from companion.persistence.models import (
+    Conversation,
+    LearningOccurrence,
+    Message,
+    ProactiveInvitation,
+)
 from companion.persistence.repositories import encode_dt
 from companion.proactive.schemas import InvitationKind, InvitationStatus
 
@@ -21,9 +26,11 @@ class ProactiveRepository:
         )
 
     def get(self, invitation_id: str, user_id: str) -> ProactiveInvitation | None:
-        return self._session.scalar(select(ProactiveInvitation).where(
-            ProactiveInvitation.id == invitation_id, ProactiveInvitation.user_id == user_id
-        ))
+        return self._session.scalar(
+            select(ProactiveInvitation).where(
+                ProactiveInvitation.id == invitation_id, ProactiveInvitation.user_id == user_id
+            )
+        )
 
     def delivery_count(
         self,
@@ -31,18 +38,24 @@ class ProactiveRepository:
         local_date: date,
         kind: InvitationKind | None = None,
     ) -> int:
-        query = select(func.count()).select_from(ProactiveInvitation).where(
-            ProactiveInvitation.user_id == user_id,
-            ProactiveInvitation.local_date == local_date.isoformat(),
+        query = (
+            select(func.count())
+            .select_from(ProactiveInvitation)
+            .where(
+                ProactiveInvitation.user_id == user_id,
+                ProactiveInvitation.local_date == local_date.isoformat(),
+            )
         )
         if kind is not None:
             query = query.where(ProactiveInvitation.kind == kind.value)
         return int(self._session.scalar(query) or 0)
 
     def latest(self, user_id: str) -> ProactiveInvitation | None:
-        return self._session.scalar(select(ProactiveInvitation).where(
-            ProactiveInvitation.user_id == user_id
-        ).order_by(ProactiveInvitation.created_at.desc()))
+        return self._session.scalar(
+            select(ProactiveInvitation)
+            .where(ProactiveInvitation.user_id == user_id)
+            .order_by(ProactiveInvitation.created_at.desc())
+        )
 
     def create(
         self,
@@ -69,13 +82,102 @@ class ProactiveRepository:
         self._session.refresh(row)
         return row
 
-    def resolve(self, row: ProactiveInvitation, *, status: InvitationStatus, now: datetime,
-                suppress_until: datetime | None = None) -> bool:
-        result = self._session.execute(update(ProactiveInvitation).where(
-            ProactiveInvitation.id == row.id,
-            ProactiveInvitation.status == InvitationStatus.PENDING.value,
-        ).values(status=status.value, responded_at=encode_dt(now),
-                 suppress_until=encode_dt(suppress_until) if suppress_until else None))
+    def resolve(
+        self,
+        row: ProactiveInvitation,
+        *,
+        status: InvitationStatus,
+        now: datetime,
+        suppress_until: datetime | None = None,
+    ) -> bool:
+        result = self._session.execute(
+            update(ProactiveInvitation)
+            .where(
+                ProactiveInvitation.id == row.id,
+                ProactiveInvitation.status == InvitationStatus.PENDING.value,
+            )
+            .values(
+                status=status.value,
+                responded_at=encode_dt(now),
+                suppress_until=encode_dt(suppress_until) if suppress_until else None,
+            )
+        )
+        self._session.commit()
+        if isinstance(result, CursorResult) and result.rowcount == 1:
+            self._session.refresh(row)
+            return True
+        return False
+
+    def validated_practice_evidence(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+    ) -> LearningOccurrence | None:
+        conversation = self._session.scalar(
+            select(Conversation).where(
+                Conversation.id == conversation_id, Conversation.user_id == user_id
+            )
+        )
+        user_message = self._session.scalar(
+            select(Message).where(
+                Message.id == user_message_id,
+                Message.conversation_id == conversation_id,
+                Message.role == "user",
+            )
+        )
+        assistant_message = self._session.scalar(
+            select(Message).where(
+                Message.id == assistant_message_id,
+                Message.conversation_id == conversation_id,
+                Message.role == "assistant",
+            )
+        )
+        if conversation is None or user_message is None or assistant_message is None:
+            raise ValueError(
+                "Practice evidence does not belong to the current user and conversation"
+            )
+        if assistant_message.created_at < user_message.created_at:
+            raise ValueError("Assistant message must follow the practice user message")
+        return self._session.scalar(
+            select(LearningOccurrence).where(
+                LearningOccurrence.source_conversation_id == conversation_id,
+                LearningOccurrence.source_user_message_id == user_message_id,
+                LearningOccurrence.source_assistant_message_id == assistant_message_id,
+            )
+        )
+
+    def finish_practice(
+        self,
+        row: ProactiveInvitation,
+        *,
+        status: InvitationStatus,
+        outcome: str,
+        now: datetime,
+        conversation_id: str | None = None,
+        user_message_id: str | None = None,
+        assistant_message_id: str | None = None,
+        occurrence: LearningOccurrence | None = None,
+    ) -> bool:
+        result = self._session.execute(
+            update(ProactiveInvitation)
+            .where(
+                ProactiveInvitation.id == row.id,
+                ProactiveInvitation.status == InvitationStatus.ACCEPTED.value,
+            )
+            .values(
+                status=status.value,
+                outcome=outcome,
+                completed_at=encode_dt(now),
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                learning_occurrence_id=occurrence.id if occurrence else None,
+                learning_item_id=occurrence.learning_item_id if occurrence else None,
+            )
+        )
         self._session.commit()
         if isinstance(result, CursorResult) and result.rowcount == 1:
             self._session.refresh(row)

@@ -17,6 +17,14 @@ class InvitationStatus(StrEnum):
     SNOOZED = "snoozed"
     DISMISSED = "dismissed"
     EXPIRED = "expired"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+
+
+class PracticeOutcome(StrEnum):
+    LEARNING_SIGNAL_CAPTURED = "learning_signal_captured"
+    COMPLETED_NOT_EVALUATED = "completed_not_evaluated"
+    ABANDONED = "abandoned"
 
 
 class InvitationDecision(StrEnum):
@@ -38,6 +46,12 @@ class InvitationSchema(BaseModel):
     suppress_until: datetime | None = None
     starter_key: str | None = None
     starter_prompt: str | None = None
+    conversation_id: str | None = None
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    learning_occurrence_id: str | None = None
+    learning_item_id: str | None = None
+    outcome: PracticeOutcome | None = None
 
 
 class ProactiveCheckResponse(BaseModel):
@@ -53,3 +67,9 @@ class ProactiveRespondResponse(BaseModel):
     review_question: ReviewQuestion | None = None
     review_complete: bool = False
     conversation_starter: str | None = None
+
+
+class PracticeFinalizeRequest(BaseModel):
+    conversation_id: str
+    user_message_id: str
+    assistant_message_id: str

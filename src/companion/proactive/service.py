@@ -13,6 +13,7 @@ from companion.proactive.schemas import (
     InvitationKind,
     InvitationSchema,
     InvitationStatus,
+    PracticeOutcome,
     ProactiveCheckRequest,
     ProactiveRespondResponse,
 )
@@ -28,9 +29,15 @@ STARTERS = (
 
 
 class ProactiveService:
-    def __init__(self, *, repository: ProactiveRepository,
-                 availability: AvailabilityService, learning: LearningService,
-                 settings: Settings, clock: Clock = system_clock) -> None:
+    def __init__(
+        self,
+        *,
+        repository: ProactiveRepository,
+        availability: AvailabilityService,
+        learning: LearningService,
+        settings: Settings,
+        clock: Clock = system_clock,
+    ) -> None:
         self._repository = repository
         self._availability = availability
         self._learning = learning
@@ -58,8 +65,11 @@ class ProactiveService:
             return None
         due = self._learning.due_count() > 0
         kind = InvitationKind.REVIEW if due else InvitationKind.CONVERSATION
-        threshold = (self._settings.proactive_review_idle_seconds if due
-                     else self._settings.proactive_conversation_idle_seconds)
+        threshold = (
+            self._settings.proactive_review_idle_seconds
+            if due
+            else self._settings.proactive_conversation_idle_seconds
+        )
         if request.idle_seconds < threshold:
             return None
         key = prompt = None
@@ -67,8 +77,16 @@ class ProactiveService:
             count = self._repository.delivery_count(self._settings.user_id, today, kind)
             index = count % len(STARTERS)
             key, prompt = STARTERS[index]
-        return self._schema(self._repository.create(user_id=self._settings.user_id, kind=kind,
-            now=now, local_date=today, starter_key=key, starter_prompt=prompt))
+        return self._schema(
+            self._repository.create(
+                user_id=self._settings.user_id,
+                kind=kind,
+                now=now,
+                local_date=today,
+                starter_key=key,
+                starter_prompt=prompt,
+            )
+        )
 
     def respond(self, invitation_id: str, decision: InvitationDecision) -> ProactiveRespondResponse:
         row = self._repository.get(invitation_id, self._settings.user_id)
@@ -92,9 +110,73 @@ class ProactiveService:
             return ProactiveRespondResponse(invitation=schema)
         if row.kind == InvitationKind.REVIEW.value:
             question = self._learning.first_due()
-            return ProactiveRespondResponse(invitation=schema, review_question=question,
-                                              review_complete=question is None)
+            return ProactiveRespondResponse(
+                invitation=schema, review_question=question, review_complete=question is None
+            )
         return ProactiveRespondResponse(invitation=schema, conversation_starter=row.starter_prompt)
+
+    def finalize_practice(
+        self,
+        invitation_id: str,
+        *,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+    ) -> InvitationSchema:
+        row = self._practice_invitation(invitation_id)
+        if row.status in {InvitationStatus.COMPLETED.value, InvitationStatus.ABANDONED.value}:
+            if (
+                row.status == InvitationStatus.COMPLETED.value
+                and row.conversation_id == conversation_id
+                and row.user_message_id == user_message_id
+                and row.assistant_message_id == assistant_message_id
+            ):
+                return self._schema(row)
+            raise InvitationConflictError(invitation_id)
+        occurrence = self._repository.validated_practice_evidence(
+            user_id=self._settings.user_id,
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id,
+        )
+        outcome = (
+            PracticeOutcome.LEARNING_SIGNAL_CAPTURED
+            if occurrence
+            else PracticeOutcome.COMPLETED_NOT_EVALUATED
+        )
+        if not self._repository.finish_practice(
+            row,
+            status=InvitationStatus.COMPLETED,
+            outcome=outcome.value,
+            now=self._now(),
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id,
+            occurrence=occurrence,
+        ):
+            raise InvitationConflictError(invitation_id)
+        return self._schema(row)
+
+    def abandon_practice(self, invitation_id: str) -> InvitationSchema:
+        row = self._practice_invitation(invitation_id)
+        if row.status == InvitationStatus.ABANDONED.value:
+            return self._schema(row)
+        if row.status != InvitationStatus.ACCEPTED.value or not self._repository.finish_practice(
+            row,
+            status=InvitationStatus.ABANDONED,
+            outcome=PracticeOutcome.ABANDONED.value,
+            now=self._now(),
+        ):
+            raise InvitationConflictError(invitation_id)
+        return self._schema(row)
+
+    def _practice_invitation(self, invitation_id: str) -> ProactiveInvitation:
+        row = self._repository.get(invitation_id, self._settings.user_id)
+        if row is None:
+            raise InvitationNotFoundError(invitation_id)
+        if row.kind != InvitationKind.CONVERSATION.value:
+            raise InvitationConflictError(invitation_id)
+        return row
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -102,7 +184,18 @@ class ProactiveService:
 
     @staticmethod
     def _schema(row: ProactiveInvitation) -> InvitationSchema:
-        return InvitationSchema(id=row.id, kind=InvitationKind(row.kind),
-            status=InvitationStatus(row.status), created_at=decode_dt(row.created_at),
+        return InvitationSchema(
+            id=row.id,
+            kind=InvitationKind(row.kind),
+            status=InvitationStatus(row.status),
+            created_at=decode_dt(row.created_at),
             suppress_until=decode_dt(row.suppress_until) if row.suppress_until else None,
-            starter_key=row.starter_key, starter_prompt=row.starter_prompt)
+            starter_key=row.starter_key,
+            starter_prompt=row.starter_prompt,
+            conversation_id=row.conversation_id,
+            user_message_id=row.user_message_id,
+            assistant_message_id=row.assistant_message_id,
+            learning_occurrence_id=row.learning_occurrence_id,
+            learning_item_id=row.learning_item_id,
+            outcome=PracticeOutcome(row.outcome) if row.outcome else None,
+        )

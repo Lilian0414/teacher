@@ -33,17 +33,31 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.url.path)
         if request.url.path == "/v1/proactive/check":
-            return httpx.Response(200, json={"invitation": {
-                "id": "invite-1", "kind": "conversation", "status": "pending",
-                "created_at": "2026-08-21T12:00:00+00:00",
-                "starter_prompt": "What made you smile today?",
-            }})
+            return httpx.Response(
+                200,
+                json={
+                    "invitation": {
+                        "id": "invite-1",
+                        "kind": "conversation",
+                        "status": "pending",
+                        "created_at": "2026-08-21T12:00:00+00:00",
+                        "starter_prompt": "What made you smile today?",
+                    }
+                },
+            )
         if request.url.path.endswith("/respond"):
-            return httpx.Response(200, json={
-                "invitation": {"id": "invite-1", "kind": "conversation",
-                               "status": "accepted", "created_at": "2026-08-21T12:00:00+00:00"},
-                "conversation_starter": "What made you smile today?",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "invitation": {
+                        "id": "invite-1",
+                        "kind": "conversation",
+                        "status": "accepted",
+                        "created_at": "2026-08-21T12:00:00+00:00",
+                    },
+                    "conversation_starter": "What made you smile today?",
+                },
+            )
         raise AssertionError(request.url.path)
 
     terminal = make_terminal()
@@ -56,6 +70,72 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
     await terminal._respond_to_invitation("start")
     assert terminal._mode == InteractionMode.PRACTICE_PROMPT
     assert requests == ["/v1/proactive/check", "/v1/proactive/invitations/invite-1/respond"]
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_practice_chat_is_finalized_once_with_returned_message_ids() -> None:
+    requests: list[tuple[str, dict[str, Any] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = __import__("json").loads(request.content) if request.content else None
+        requests.append((request.url.path, payload))
+        if request.url.path == "/v1/conversations/conversation-1/messages":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "user-1"},
+                    "assistant_message": {"id": "assistant-1", "content": "Nice answer."},
+                },
+            )
+        if request.url.path.endswith("/practice/complete"):
+            return httpx.Response(200, json={"outcome": "completed_not_evaluated"})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    await terminal._send_chat_message("My weekend was restful.")
+
+    assert requests[1] == (
+        "/v1/proactive/invitations/invite-1/practice/complete",
+        {
+            "conversation_id": "conversation-1",
+            "user_message_id": "user-1",
+            "assistant_message_id": "assistant-1",
+        },
+    )
+    assert terminal._active_practice_invitation_id is None
+    assert "Practice complete. This conversation was not graded." in terminal._messages.values
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_skip_practice_persists_abandonment_before_resetting_ui() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/practice/abandon")
+        return httpx.Response(200, json={"status": "abandoned", "outcome": "abandoned"})
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    await terminal.action_cancel_intent()
+
+    assert terminal._mode == InteractionMode.NORMAL
+    assert terminal._active_practice_invitation_id is None
+    assert "Practice skipped." in terminal._messages.values
     await terminal._client.aclose()
 
 
@@ -186,9 +266,7 @@ def test_startup_message_shows_provider_without_api_key() -> None:
         }
     )
 
-    assert rendered == (
-        "[system] Companion UI ready. LLM: groq/test-model/key_present_unverified."
-    )
+    assert rendered == ("[system] Companion UI ready. LLM: groq/test-model/key_present_unverified.")
     assert "API" not in rendered
 
 
