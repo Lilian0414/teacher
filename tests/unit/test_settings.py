@@ -6,6 +6,33 @@ from companion.persistence.database import make_engine
 from companion.settings import Settings
 
 
+def test_example_environment_enables_documented_semantic_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "EMBEDDINGS_ENABLED",
+        "COMPANION_EMBEDDINGS_ENABLED",
+        "EMBEDDING_BASE_URL",
+        "COMPANION_EMBEDDING_BASE_URL",
+        "EMBEDDING_MODEL",
+        "COMPANION_EMBEDDING_MODEL",
+        "EMBEDDING_DIMENSIONS",
+        "COMPANION_EMBEDDING_DIMENSIONS",
+        "EMBEDDING_TIMEOUT_SECONDS",
+        "COMPANION_EMBEDDING_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    example_environment = Path(__file__).parents[2] / ".env.example"
+    settings = Settings(_env_file=example_environment)  # type: ignore[call-arg]
+
+    assert settings.embeddings_enabled is True
+    assert settings.embedding_base_url == "http://127.0.0.1:11434/v1"
+    assert settings.embedding_model == "nomic-embed-text"
+    assert settings.embedding_dimensions == 768
+    assert settings.embedding_timeout_seconds == 10
+
+
 def test_default_groq_model_is_supported_replacement() -> None:
     assert Settings().groq_model == "openai/gpt-oss-20b"
 

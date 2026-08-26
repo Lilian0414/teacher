@@ -84,13 +84,30 @@ intentionally outside the current architecture.
 ## Setup and run (Apple Silicon)
 
 Python 3.12 and a normal virtual environment are sufficient; no Intel Homebrew paths are
-required. From a fresh clone:
+required. Install Ollama separately (for example, with `brew install ollama`). Then, from a fresh
+clone, create the documented local profile and replace the empty `GROQ_API_KEY` value in `.env`
+with your key before continuing:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.lock
 python -m pip install --no-deps --no-build-isolation -e .
+cp .env.example .env
+# Edit .env and fill in GROQ_API_KEY before continuing.
+```
+
+Start Ollama in another terminal and leave it running:
+
+```bash
+ollama serve
+```
+
+Back in the project terminal, download the embedding model, prepare the database, and only then
+start the semantic-enabled local profile:
+
+```bash
+ollama pull nomic-embed-text
 alembic upgrade head
 companion
 ```
@@ -129,11 +146,11 @@ EMBEDDING_TIMEOUT_SECONDS=10
 Keep real `GROQ_API_KEY` values in `.env` or the shell environment only. `/v1/state` reports a
 present key as `key_present_unverified` until an actual request proves the configured model is
 usable. Provider/model failures include the model and Groq's safe error detail, never the key.
-The documented local semantic profile is enabled by default. Install and start Ollama once with
-`brew install ollama`, then run `ollama serve` and `ollama pull nomic-embed-text`. Set
-`EMBEDDINGS_ENABLED=false` for an explicit lexical-only profile. The embedding endpoint is
-OpenAI-compatible and uses asynchronous, batched requests; model identity and exact dimensions are
-stored with every vector so incompatible vectors are never compared silently.
+The documented `.env.example` local profile enables semantic recall; a bare `Settings()` with no
+environment file does not. Set `EMBEDDINGS_ENABLED=false` in `.env` for an explicit lexical-only
+profile. The embedding endpoint is OpenAI-compatible and uses asynchronous, batched requests;
+model identity and exact dimensions are stored with every vector so incompatible vectors are never
+compared silently.
 
 ## Reproducible dependencies and validation
 
