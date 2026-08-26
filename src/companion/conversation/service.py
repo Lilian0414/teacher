@@ -18,6 +18,9 @@ from companion.schemas.conversation import (
     MessageSchema,
 )
 
+ORDINARY_CHAT_SOURCE = "terminal"
+TRANSLATED_SAY_SOURCE = "say"
+
 
 @dataclass(frozen=True)
 class SendMessageResult:
@@ -108,7 +111,7 @@ class ConversationService:
             role=MessageRole.USER,
             content=content,
             language="en",
-            source="terminal",
+            source=ORDINARY_CHAT_SOURCE,
             created_at=self._clock(),
         )
         return await self._reply_to_user_message(user_message)
@@ -165,7 +168,7 @@ class ConversationService:
             source="terminal",
             created_at=self._clock(),
         )
-        if self._learning_service is not None:
+        if self._learning_service is not None and user_message.source == ORDINARY_CHAT_SOURCE:
             request = LearningSignalRequest(
                 conversation_id=user_message.conversation_id,
                 user_message_id=user_message.id,
@@ -195,10 +198,18 @@ class ConversationService:
         conversation_id: str,
         english_content: str,
     ) -> SendMessageResult:
-        return await self.send_user_message(
+        conversation = self._require_conversation(conversation_id)
+        if conversation.ended_at is not None:
+            raise ConversationEndedError(conversation_id)
+        user_message = self._repository.add_message(
             conversation_id=conversation_id,
+            role=MessageRole.USER,
             content=english_content,
+            language="en",
+            source=TRANSLATED_SAY_SOURCE,
+            created_at=self._clock(),
         )
+        return await self._reply_to_user_message(user_message)
 
     async def _generate_assistant_reply(
         self,

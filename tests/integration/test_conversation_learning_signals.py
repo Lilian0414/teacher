@@ -12,7 +12,8 @@ from companion.learning.schemas import (
     LearningSignalRequest,
 )
 from companion.persistence.database import Base, make_engine
-from companion.providers.errors import LLMInvalidResponseError
+from companion.providers.errors import LLMInvalidResponseError, LLMTemporaryError
+from companion.providers.schemas import ChatRequest, ChatResponse
 from tests.support import RecordingLLMProvider
 
 
@@ -95,6 +96,84 @@ async def test_completed_turn_creates_due_item_with_durable_provenance_and_is_id
         assert review.correct is True
         assert review.stage == 1
         assert len(learning_repository.attempts_for(item.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_translated_say_turn_is_not_eligible_for_conversation_learning() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = BoundSignalProvider()
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+        )
+        conversation = service.create_conversation()
+
+        result = await service.insert_translated_user_message(
+            conversation_id=conversation.id,
+            english_content="Today was completely exhausting.",
+        )
+        stored = service.get_conversation(conversation.id)
+
+        assert result.error is None
+        assert [message.role.value for message in stored.messages] == ["user", "assistant"]
+        assert stored.messages[0].source == "say"
+        assert provider.learning_signal_requests == []
+        assert learning_repository.occurrences() == []
+        assert learning_repository.due_count(
+            user_id="default", now=datetime.max.replace(tzinfo=UTC)
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_translated_say_retry_remains_ineligible_without_duplicate_messages() -> None:
+    class FailChatOnceProvider(BoundSignalProvider):
+        async def chat(self, request: ChatRequest) -> ChatResponse:
+            self.chat_requests.append(request)
+            if len(self.chat_requests) == 1:
+                raise LLMTemporaryError("Assistant is temporarily unavailable")
+            return ChatResponse(content="Recovered assistant reply")
+
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = FailChatOnceProvider()
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+        )
+        conversation = service.create_conversation()
+
+        partial = await service.insert_translated_user_message(
+            conversation_id=conversation.id,
+            english_content="Today was completely exhausting.",
+        )
+        retried = await service.retry_assistant_reply(
+            conversation_id=conversation.id,
+            user_message_id=partial.user_message.id,
+        )
+        repeated = await service.retry_assistant_reply(
+            conversation_id=conversation.id,
+            user_message_id=partial.user_message.id,
+        )
+        stored = service.get_conversation(conversation.id)
+
+        assert partial.assistant_message is None
+        assert partial.retryable is True
+        assert retried.assistant_message is not None
+        assert repeated.assistant_message == retried.assistant_message
+        assert [message.role.value for message in stored.messages] == ["user", "assistant"]
+        assert stored.messages[0].source == "say"
+        assert provider.learning_signal_requests == []
+        assert learning_repository.occurrences() == []
+        assert learning_repository.due_count(
+            user_id="default", now=datetime.max.replace(tzinfo=UTC)
+        ) == 0
 
 
 @pytest.mark.asyncio

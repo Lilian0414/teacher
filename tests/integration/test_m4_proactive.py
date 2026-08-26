@@ -7,9 +7,14 @@ from sqlalchemy.orm import Session
 
 from companion.api.dependencies import get_proactive_service
 from companion.availability import AvailabilityService
-from companion.conversation.repository import ConversationRepository
+from companion.conversation import ConversationRepository, ConversationService
 from companion.learning import LearningRepository, LearningService
-from companion.learning.schemas import LearningKind
+from companion.learning.schemas import (
+    LearningKind,
+    LearningSignalCandidate,
+    LearningSignalReason,
+    LearningSignalRequest,
+)
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
@@ -19,8 +24,24 @@ from companion.proactive import (
     ProactiveRepository,
     ProactiveService,
 )
-from companion.schemas.conversation import MessageRole
 from companion.settings import Settings
+from tests.support import RecordingLLMProvider
+
+
+class ProactiveSignalProvider(RecordingLLMProvider):
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate:
+        self.learning_signal_requests.append(request)
+        return LearningSignalCandidate(
+            source_conversation_id=request.conversation_id,
+            source_user_message_id=request.user_message_id,
+            source_assistant_message_id=request.assistant_message_id,
+            kind=LearningKind.EXPRESSION,
+            review_prompt="I went home",
+            accepted_answers=["I went home"],
+            reason=LearningSignalReason.CORRECTION,
+        )
 
 
 def test_proactive_http_flow_is_persistent_and_safe_for_duplicate_decisions() -> None:
@@ -68,19 +89,21 @@ def test_proactive_http_flow_is_persistent_and_safe_for_duplicate_decisions() ->
     assert duplicate.status_code == 409
 
 
-def test_conversation_practice_reuses_occurrence_and_completion_is_idempotent() -> None:
+@pytest.mark.asyncio
+async def test_conversation_practice_reuses_occurrence_and_completion_is_idempotent() -> None:
     engine = make_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     session = Session(engine)
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     settings = Settings(timezone="UTC", proactive_conversation_idle_seconds=0)
     learning_repository = LearningRepository(session)
+    learning = LearningService(repository=learning_repository, clock=lambda: now)
     service = ProactiveService(
         repository=ProactiveRepository(session),
         availability=AvailabilityService(
             repository=AvailabilityRepository(session), clock=lambda: now
         ),
-        learning=LearningService(repository=learning_repository, clock=lambda: now),
+        learning=learning,
         settings=settings,
         clock=lambda: now,
     )
@@ -88,47 +111,30 @@ def test_conversation_practice_reuses_occurrence_and_completion_is_idempotent() 
     assert invitation is not None
     service.respond(invitation.id, InvitationDecision.START)
 
-    conversations = ConversationRepository(session)
-    conversation = conversations.create_conversation(user_id=settings.user_id, started_at=now)
-    user_message = conversations.add_message(
-        conversation_id=conversation.id,
-        role=MessageRole.USER,
-        content="I goed home",
-        language="en",
-        source="terminal",
-        created_at=now,
+    conversation_service = ConversationService(
+        repository=ConversationRepository(session),
+        llm_provider=ProactiveSignalProvider(),
+        learning_service=learning,
+        clock=lambda: now,
     )
-    assistant_message = conversations.add_message(
-        conversation_id=conversation.id,
-        role=MessageRole.ASSISTANT,
-        content="You can say: I went home.",
-        language="en",
-        source="terminal",
-        created_at=now,
+    conversation = conversation_service.create_conversation()
+    turn = await conversation_service.send_user_message(
+        conversation_id=conversation.id, content="I goed home"
     )
-    occurrence = learning_repository.capture_occurrence(
-        user_id=settings.user_id,
-        prompt="I went home",
-        kind=LearningKind.EXPRESSION,
-        accepted_answers=["I went home"],
-        conversation_id=conversation.id,
-        user_message_id=user_message.id,
-        assistant_message_id=assistant_message.id,
-        acceptance_reason="correction",
-        now=now,
-    )
+    assert turn.assistant_message is not None
+    occurrence = learning_repository.occurrences()[0]
 
     completed = service.finalize_practice(
         invitation.id,
         conversation_id=conversation.id,
-        user_message_id=user_message.id,
-        assistant_message_id=assistant_message.id,
+        user_message_id=turn.user_message.id,
+        assistant_message_id=turn.assistant_message.id,
     )
     retried = service.finalize_practice(
         invitation.id,
         conversation_id=conversation.id,
-        user_message_id=user_message.id,
-        assistant_message_id=assistant_message.id,
+        user_message_id=turn.user_message.id,
+        assistant_message_id=turn.assistant_message.id,
     )
 
     assert completed.status == "completed"
@@ -136,7 +142,7 @@ def test_conversation_practice_reuses_occurrence_and_completion_is_idempotent() 
     assert completed.learning_occurrence_id == occurrence.id
     assert completed.learning_item_id == occurrence.learning_item_id
     assert retried == completed
-    assert service._learning.due_count() == 1
+    assert learning.due_count() == 1
     service._clock = lambda: now + timedelta(minutes=61)
     later = service.check(ProactiveCheckRequest(idle_seconds=9999, can_present=True))
     assert later is not None
