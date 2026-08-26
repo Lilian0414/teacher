@@ -531,6 +531,13 @@ class CompanionTerminal(App[None]):
             f"{evidence['conversation_id']}/messages/{evidence['user_message_id']}"
             "/retry-assistant"
         )
+        if response.status_code in (404, 409):
+            payload = cast(dict[str, Any], response.json())
+            detail = payload.get("detail", "Assistant reply can no longer be retried.")
+            self._messages.write(f"[system] {detail}")
+            self._pending_assistant_retry = None
+            self._after_mode_change()
+            return
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
         if not result.get("ok"):

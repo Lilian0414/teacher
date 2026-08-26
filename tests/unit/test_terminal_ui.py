@@ -397,6 +397,55 @@ async def test_say_partial_retry_preserves_evidence_until_assistant_succeeds() -
     await terminal._client.aclose()
 
 
+@pytest.mark.asyncio
+async def test_say_retry_conflict_shows_detail_and_clears_evidence() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.url.path == "/v1/commands/execute":
+            return httpx.Response(
+                200,
+                json={
+                    "command": "say",
+                    "ok": False,
+                    "inserted_text": "I am tired today.",
+                    "inserted_user_message": {"id": "user-1"},
+                    "assistant_error": "Assistant unavailable",
+                    "retryable": True,
+                },
+            )
+        if request.url.path.endswith("/retry-assistant"):
+            return httpx.Response(
+                409,
+                json={"detail": "The retry target is stale because newer activity exists."},
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+
+    await terminal._send_command("/say 今天很累")
+    await terminal._retry_assistant_reply()
+
+    assert terminal._pending_assistant_retry is None
+    messages = cast(MessageSink, terminal._messages).values
+    assert messages[-1] == "[system] The retry target is stale because newer activity exists."
+    assert requests == [
+        ("POST", "/v1/commands/execute"),
+        (
+            "POST",
+            "/v1/conversations/conversation-1/messages/user-1/retry-assistant",
+        ),
+    ]
+    assert all(path != "/v1/messages" for _, path in requests)
+    await terminal._client.aclose()
+
+
 def test_startup_message_shows_provider_without_api_key() -> None:
     rendered = CompanionTerminal._startup_message(
         {
