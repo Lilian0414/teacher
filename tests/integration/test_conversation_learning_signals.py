@@ -118,7 +118,8 @@ async def test_no_candidate_or_extraction_failure_preserves_successful_chat(
 
 
 @pytest.mark.asyncio
-async def test_greeting_candidate_is_rejected_by_python_eligibility_gate() -> None:
+@pytest.mark.parametrize("greeting", ["Hello!", "Hello there", "Hey, how's it going?"])
+async def test_greeting_candidate_is_rejected_by_python_eligibility_gate(greeting: str) -> None:
     engine = make_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
@@ -131,11 +132,35 @@ async def test_greeting_candidate_is_rejected_by_python_eligibility_gate() -> No
         )
         conversation = service.create_conversation()
 
-        result = await service.send_user_message(conversation_id=conversation.id, content="Hello!")
+        result = await service.send_user_message(conversation_id=conversation.id, content=greeting)
 
         assert result.assistant_message is not None
         assert repository.occurrences() == []
         assert repository.due_count(user_id="default", now=datetime.max.replace(tzinfo=UTC)) == 0
+
+
+@pytest.mark.asyncio
+async def test_substantive_turn_starting_with_greeting_remains_eligible() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = BoundSignalProvider()
+        repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=repository),
+        )
+        conversation = service.create_conversation()
+
+        result = await service.send_user_message(
+            conversation_id=conversation.id,
+            content="Hello, I don't know how to say that I missed class",
+        )
+
+        assert result.assistant_message is not None
+        assert len(repository.occurrences()) == 1
+        assert repository.due_count(user_id="default", now=datetime.max.replace(tzinfo=UTC)) == 1
 
 
 @pytest.mark.asyncio

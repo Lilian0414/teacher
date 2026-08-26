@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 from companion.clock import Clock, system_clock
@@ -17,6 +18,14 @@ from companion.persistence.repositories import decode_dt
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse, contains_cjk
 
 REVIEW_INTERVAL_DAYS = (1, 3, 7, 14, 30)
+CHITCHAT = re.compile(
+    r"^(?:"
+    r"(?:hi|hello|hey)(?:[ ,]+(?:there|how(?: are you|'s it going)))?"
+    r"|good (?:morning|afternoon|evening|night)"
+    r"|how(?: are you|'s it going)"
+    r"|thanks(?: a lot)?|thank you(?: very much)?"
+    r")$"
+)
 
 
 class LearningService:
@@ -96,16 +105,7 @@ class LearningService:
     @staticmethod
     def _is_chitchat(value: str) -> bool:
         normalized = normalize_learning_text(value)
-        return normalized in {
-            "good morning",
-            "good night",
-            "hello",
-            "hey",
-            "hi",
-            "how are you",
-            "thanks",
-            "thank you",
-        }
+        return CHITCHAT.fullmatch(normalized) is not None
 
     def first_due(self) -> ReviewQuestion | None:
         items = self._repository.due_items(user_id=self._user_id, now=self._clock(), limit=1)
