@@ -410,20 +410,23 @@ class CompanionTerminal(App[None]):
 
     async def _show_onboarding_if_needed(self) -> None:
         try:
-            response = await self._client.get("/v1/preferences")
+            response = await self._client.post("/v1/preferences/onboarding/offer")
             response.raise_for_status()
-            if not response.json().get("onboarded"):
-                self._messages.write(
-                    "Welcome! Choose companion preferences, or continue immediately.\n"
-                    "Use `/preferences defaults` (or `/preferences skip`) for defaults.\n"
-                    "Use `/preferences set correction_style light|normal|intensive`,\n"
-                    "`proactive_cadence rare|normal|frequent`, `practice_balance "
-                    "prefer_review|balanced|prefer_conversation`, or `sound_enabled true|false`.\n"
-                    "Optional local-time windows: `/preferences set active_hours 08:00-22:00` "
-                    "or `quiet_hours 22:00-08:00`. Type `/preferences` anytime to inspect them."
-                )
+            if response.json().get("should_offer"):
+                self._write_onboarding()
         except (httpx.HTTPError, ValueError):
             return
+
+    def _write_onboarding(self) -> None:
+        self._messages.write(
+            "Welcome! Choose companion preferences, or continue immediately.\n"
+            "Use `/preferences defaults` (or `/preferences skip`) for defaults.\n"
+            "Use `/preferences set correction_style light|normal|intensive`,\n"
+            "`proactive_cadence rare|normal|frequent`, `practice_balance "
+            "prefer_review|balanced|prefer_conversation`, or `sound_enabled true|false`.\n"
+            "Optional local-time windows: `/preferences set active_hours 08:00-22:00` "
+            "or `quiet_hours 22:00-08:00`. Type `/preferences` anytime to inspect them."
+        )
 
     async def _handle_preferences(self, raw: str) -> None:
         parts = raw.split()
@@ -431,6 +434,12 @@ class CompanionTerminal(App[None]):
             response = await self._client.get("/v1/preferences")
         elif parts[1] in {"defaults", "skip", "reset"}:
             response = await self._client.post("/v1/preferences/reset")
+        elif parts[1] == "onboard" and len(parts) == 2:
+            response = await self._client.post("/v1/preferences/onboarding/restart")
+            response.raise_for_status()
+            if response.json().get("should_offer"):
+                self._write_onboarding()
+            return
         elif len(parts) == 4 and parts[1] == "set":
             key, value = parts[2], parts[3]
             payload: dict[str, object]
@@ -447,7 +456,7 @@ class CompanionTerminal(App[None]):
                 payload = {key: value}
             response = await self._client.patch("/v1/preferences", json=payload)
         else:
-            raise ValueError("Use /preferences [defaults|reset|set NAME VALUE]")
+            raise ValueError("Use /preferences [defaults|reset|onboard|set NAME VALUE]")
         response.raise_for_status()
         profile = cast(dict[str, Any], response.json())
         self._messages.write(

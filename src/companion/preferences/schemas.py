@@ -52,3 +52,7 @@ class LearnerPreferencesSchema(BaseModel):
     practice_balance: PracticeBalance = PracticeBalance.BALANCED
     sound_enabled: bool = True
     onboarded: bool = False
+
+
+class OnboardingOfferSchema(BaseModel):
+    should_offer: bool

@@ -184,8 +184,12 @@ timezone) remain environment-backed `Settings`. Learner behavior is stored separ
 Core database and is read or changed through the Core API. Existing databases with no profile
 receive the current defaults without being blocked.
 
-On first UI run, `/preferences defaults` or `/preferences skip` persists the documented defaults.
+On first UI run, the non-blocking onboarding offer is recorded by Core before it is displayed, so
+continuing directly to conversation will not repeat it after restart. `/preferences defaults` or
+`/preferences skip` persists the documented defaults.
 Use `/preferences` later to inspect the profile, `/preferences set NAME VALUE` to change one value,
-or `/preferences reset` to restore defaults. Correction style, proactive cadence, optional active
+or `/preferences reset` to restore defaults. Use `/preferences onboard` to explicitly show the
+onboarding instructions again. PATCH null values are ignored; reset is the supported way to clear
+optional hour windows. Correction style, proactive cadence, optional active
 and quiet hours, practice balance, and the future proactive-sound preference are persisted. Sound
 is intentionally not played yet; audio remains outside this issue.

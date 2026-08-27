@@ -33,7 +33,12 @@ from companion.memory import (
     MemoryService,
     MemoryValidationError,
 )
-from companion.preferences import LearnerPreferencesSchema, PreferencesService, PreferencesUpdate
+from companion.preferences import (
+    LearnerPreferencesSchema,
+    OnboardingOfferSchema,
+    PreferencesService,
+    PreferencesUpdate,
+)
 from companion.proactive import (
     InvitationConflictError,
     InvitationNotFoundError,
@@ -92,6 +97,21 @@ async def reset_preferences(
     service: PreferencesService = PreferencesDependency,
 ) -> LearnerPreferencesSchema:
     return service.reset()
+
+
+@router.post("/v1/preferences/onboarding/offer")
+async def offer_preferences_onboarding(
+    service: PreferencesService = PreferencesDependency,
+) -> OnboardingOfferSchema:
+    return OnboardingOfferSchema(should_offer=service.offer_onboarding())
+
+
+@router.post("/v1/preferences/onboarding/restart")
+async def restart_preferences_onboarding(
+    service: PreferencesService = PreferencesDependency,
+) -> OnboardingOfferSchema:
+    service.restart_onboarding()
+    return OnboardingOfferSchema(should_offer=service.offer_onboarding())
 
 
 @router.post("/v1/proactive/check")

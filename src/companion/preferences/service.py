@@ -30,13 +30,48 @@ class PreferencesService:
         if row is None:
             row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)
         for field, value in update.model_dump(exclude_unset=True).items():
+            # PATCH treats null as "not supplied" so paired windows cannot be
+            # accidentally half-cleared. reset() is the supported clearing path.
             if value is not None:
                 setattr(row, field, self._encode(value))
+        row.onboarding_state = "completed"
         row.updated_at = now
         return self._schema(self._repository.save(row))
 
     def reset(self) -> LearnerPreferencesSchema:
-        return self.update(PreferencesUpdate(**LearnerPreferencesSchema().model_dump()))
+        row = self._repository.get(self._user_id)
+        now = datetime.now(UTC).isoformat()
+        if row is None:
+            row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)
+        defaults = LearnerPreferencesSchema()
+        for field in PreferencesUpdate.model_fields:
+            setattr(row, field, self._encode(getattr(defaults, field)))
+        row.onboarding_state = "completed"
+        row.updated_at = now
+        return self._schema(self._repository.save(row))
+
+    def offer_onboarding(self) -> bool:
+        """Persist the first-run offer before the UI displays it."""
+        row = self._repository.get(self._user_id)
+        if row is not None and row.onboarding_state != "pending":
+            return False
+        now = datetime.now(UTC).isoformat()
+        if row is None:
+            row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)
+        row.onboarding_state = "offered"
+        row.updated_at = now
+        self._repository.save(row)
+        return True
+
+    def restart_onboarding(self) -> None:
+        """Allow an explicit UI command to show onboarding again."""
+        row = self._repository.get(self._user_id)
+        now = datetime.now(UTC).isoformat()
+        if row is None:
+            row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)
+        row.onboarding_state = "pending"
+        row.updated_at = now
+        self._repository.save(row)
 
     @staticmethod
     def _encode(value: object) -> object:
@@ -58,5 +93,5 @@ class PreferencesService:
             quiet_hours_end=clock(row.quiet_hours_end),
             practice_balance=PracticeBalance(row.practice_balance),
             sound_enabled=row.sound_enabled,
-            onboarded=True,
+            onboarded=row.onboarding_state != "pending",
         )

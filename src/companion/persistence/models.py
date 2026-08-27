@@ -194,5 +194,6 @@ class LearnerPreferences(Base):
     quiet_hours_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
     practice_balance: Mapped[str] = mapped_column(String(24), default="balanced")
     sound_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    onboarding_state: Mapped[str] = mapped_column(String(16), default="pending")
     created_at: Mapped[str] = mapped_column(String(40))
     updated_at: Mapped[str] = mapped_column(String(40))

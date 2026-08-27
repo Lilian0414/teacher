@@ -27,6 +27,9 @@ def upgrade() -> None:
         sa.Column("quiet_hours_end", sa.String(length=5), nullable=True),
         sa.Column("practice_balance", sa.String(length=24), nullable=False),
         sa.Column("sound_enabled", sa.Boolean(), nullable=False),
+        sa.Column(
+            "onboarding_state", sa.String(length=16), nullable=False, server_default="pending"
+        ),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("updated_at", sa.String(length=40), nullable=False),
     )

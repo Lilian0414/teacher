@@ -30,6 +30,47 @@ def assert_mode(terminal: CompanionTerminal, expected: InteractionMode) -> None:
 
 
 @pytest.mark.asyncio
+async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> None:
+    should_offer = iter((True, False))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/preferences/onboarding/offer":
+            assert request.method == "POST"
+            return httpx.Response(200, json={"should_offer": next(should_offer)})
+        if request.url.path == "/v1/conversations/conversation-1/messages":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "user-1"},
+                    "assistant_message": {"id": "assistant-1", "content": "Hello!"},
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    messages = cast(MessageSink, terminal._messages)
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._show_onboarding_if_needed()
+    assert len(messages.values) == 1
+    assert "continue immediately" in messages.values[0]
+    assert terminal._mode == InteractionMode.NORMAL
+
+    terminal._conversation_id = "conversation-1"
+    await terminal._send_chat_message("Hello")
+    assert "assistant: Hello!" in messages.values
+
+    await terminal._show_onboarding_if_needed()
+    assert sum("continue immediately" in message for message in messages.values) == 1
+    assert terminal._mode == InteractionMode.NORMAL
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_answers() -> None:
     requests: list[str] = []
 

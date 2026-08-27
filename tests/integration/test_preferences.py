@@ -8,6 +8,7 @@ from companion.availability import AvailabilityService, OverrideRequest
 from companion.learning import LearningRepository, LearningService
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
+from companion.persistence.models import LearnerPreferences
 from companion.persistence.repositories import AvailabilityRepository
 from companion.preferences import (
     CorrectionStyle,
@@ -31,14 +32,47 @@ def test_preferences_defaults_partial_update_reset_and_restart() -> None:
     assert service.read().correction_style == "normal"
 
     service.update(
-        PreferencesUpdate(correction_style=CorrectionStyle.INTENSIVE, sound_enabled=False)
+        PreferencesUpdate(
+            correction_style=CorrectionStyle.INTENSIVE,
+            sound_enabled=False,
+            active_hours_start=time(8),
+            active_hours_end=time(22),
+            quiet_hours_start=time(12),
+            quiet_hours_end=time(13),
+        )
     )
     restarted = PreferencesService(PreferencesRepository(Session(engine)))
     assert restarted.read().correction_style == "intensive"
     assert restarted.read().proactive_cadence == "normal"
     assert restarted.read().sound_enabled is False
-    assert restarted.reset().correction_style == "normal"
+    reset = restarted.reset()
+    assert reset.correction_style == "normal"
+    assert reset.active_hours_start is None
+    assert reset.active_hours_end is None
+    assert reset.quiet_hours_start is None
+    assert reset.quiet_hours_end is None
+    row = Session(engine).get(LearnerPreferences, "default")
+    assert row is not None
+    assert row.active_hours_start is None
+    assert row.active_hours_end is None
+    assert row.quiet_hours_start is None
+    assert row.quiet_hours_end is None
     assert restarted.read().onboarded is True
+
+
+def test_onboarding_offer_is_persisted_once_and_can_be_explicitly_restarted() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    first_run = PreferencesService(PreferencesRepository(Session(engine)))
+
+    assert first_run.offer_onboarding() is True
+    assert first_run.read().onboarded is True
+
+    restarted = PreferencesService(PreferencesRepository(Session(engine)))
+    assert restarted.offer_onboarding() is False
+    restarted.restart_onboarding()
+    assert restarted.offer_onboarding() is True
+    assert restarted.offer_onboarding() is False
 
 
 def test_preferences_http_api_uses_core_service() -> None:
