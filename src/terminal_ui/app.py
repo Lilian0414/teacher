@@ -75,7 +75,13 @@ class CompanionTerminal(App[None]):
         ("escape", "cancel_intent", "Try myself"),
     ]
 
-    def __init__(self, core_url: str | None = None, recorder: Any | None = None) -> None:
+    def __init__(
+        self,
+        core_url: str | None = None,
+        recorder: Any | None = None,
+        *,
+        recording_limit_seconds: float = 30,
+    ) -> None:
         super().__init__()
         self._core_url = (core_url or get_settings().core_url).rstrip("/")
         self._client = httpx.AsyncClient(
@@ -150,7 +156,10 @@ class CompanionTerminal(App[None]):
         self._cued_invitation_ids: set[str] = set()
         self._last_activity = time.monotonic()
         self._recorder = recorder or MacMicrophoneRecorder()
-        self._recording_task: asyncio.Task[None] | None = None
+        self._recording_limit_seconds = recording_limit_seconds
+        self._recording = False
+        self._recording_timeout_task: asyncio.Task[None] | None = None
+        self._finishing_recording = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -191,9 +200,9 @@ class CompanionTerminal(App[None]):
                 InteractionMode.PRACTICE_PROMPT,
             )
         if action == "record_answer":
-            return self._mode == InteractionMode.REVIEW and self._recording_task is None
+            return self._mode == InteractionMode.REVIEW
         if action == "stop_recording":
-            return self._recording_task is not None
+            return self._recording
         if action in {"help_intent", "hint_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
         if action == "use_suggestion":
@@ -228,50 +237,67 @@ class CompanionTerminal(App[None]):
         await self._run_guarded(self._run_review_intent)
 
     async def action_record_answer(self) -> None:
-        if (
-            self._waiting
-            or self._mode != InteractionMode.REVIEW
-            or self._recording_task is not None
-        ):
+        if self._waiting or self._mode != InteractionMode.REVIEW:
             return
-        self._recording_task = asyncio.create_task(self._run_recording())
-        self._refresh_action_buttons()
-
-    async def _run_recording(self) -> None:
-        try:
-            await self._run_guarded(self._record_review_answer)
-        finally:
-            self._recording_task = None
-            self._refresh_action_buttons()
-
-    async def action_stop_recording(self) -> None:
-        task = self._recording_task
-        if task is None:
+        if self._recording:
+            await self._run_guarded(self._stop_and_submit_recording)
             return
-        cancel = getattr(self._recorder, "cancel", None)
-        if callable(cancel):
-            cancel()
-        task.cancel()
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        self._messages.write("[system] Recording cancelled. You can still type your answer.")
-
-    async def _record_review_answer(self) -> None:
-        self._messages.write("[system] Recording for 5 seconds…")
-        try:
-            audio = await self._recorder.record()
-            response = await self._client.post(
-                "/v1/speech/transcriptions", content=audio, headers={"Content-Type": "audio/wav"}
-            )
-            response.raise_for_status()
-            transcript = str(response.json().get("transcript", "")).strip()
-            if not transcript:
-                raise ValueError("Transcription was empty; please retry or type your answer.")
+            await self._recorder.start()
         except MicrophoneUnavailableError as exc:
             self._messages.write(f"[system] {exc} You can still type your answer.")
             return
+        self._recording = True
+        self._messages.write(
+            "[system] Recording… press Ctrl+M to stop & submit or Ctrl+X to cancel."
+        )
+        self._recording_timeout_task = asyncio.create_task(self._recording_safety_timeout())
+        self._refresh_action_buttons()
+
+    async def _recording_safety_timeout(self) -> None:
+        await asyncio.sleep(self._recording_limit_seconds)
+        if self._recording:
+            self._messages.write("[system] Recording safety limit reached; submitting audio.")
+            await self._run_guarded(lambda: self._stop_and_submit_recording(from_timeout=True))
+
+    async def action_stop_recording(self) -> None:
+        if not self._recording or self._finishing_recording:
+            return
+        self._recording = False
+        self._cancel_recording_timeout()
+        await self._recorder.cancel()
+        self._refresh_action_buttons()
+        self._messages.write("[system] Recording cancelled. You can still type your answer.")
+
+    def _cancel_recording_timeout(self) -> None:
+        task = self._recording_timeout_task
+        self._recording_timeout_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _stop_and_submit_recording(self, *, from_timeout: bool = False) -> None:
+        if not self._recording or self._finishing_recording:
+            return
+        self._finishing_recording = True
+        self._recording = False
+        self._cancel_recording_timeout()
+        self._refresh_action_buttons()
+        try:
+            audio = await self._recorder.stop()
+            await self._transcribe_review_answer(audio)
+        finally:
+            self._finishing_recording = False
+        if from_timeout:
+            self._recording_timeout_task = None
+
+    async def _transcribe_review_answer(self, audio: bytes) -> None:
+        response = await self._client.post(
+            "/v1/speech/transcriptions", content=audio, headers={"Content-Type": "audio/wav"}
+        )
+        response.raise_for_status()
+        transcript = str(response.json().get("transcript", "")).strip()
+        if not transcript:
+            raise ValueError("Transcription was empty; please retry or type your answer.")
         self._messages.write(f"> 🎤 {transcript}")
         await self._submit_review_answer(transcript)
 
@@ -443,8 +469,8 @@ class CompanionTerminal(App[None]):
         ):
             return [None, None, ("Cancel", "cancel_intent")]
         if self._mode == InteractionMode.REVIEW:
-            if self._recording_task is not None:
-                return [("Stop recording", "stop_recording"), None, None]
+            if self._recording:
+                return [("Stop & submit", "record_answer"), None, ("Cancel", "stop_recording")]
             return [("Speak answer", "record_answer"), None, ("Stop review", "cancel_intent")]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
