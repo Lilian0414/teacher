@@ -1,6 +1,8 @@
 import asyncio
 import os
+import sys
 import time
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -11,7 +13,7 @@ from textual.widgets import Input
 
 from companion.settings import get_settings
 from terminal_ui.app import CompanionTerminal, InteractionMode
-from terminal_ui.recording import MicrophoneUnavailableError
+from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
 
 class FakeRecorder:
@@ -141,21 +143,90 @@ async def test_transcription_retry_creates_only_one_review_attempt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_recording_keeps_active_review_without_submission() -> None:
-    class CancelledRecorder:
-        async def record(self) -> bytes:
-            raise asyncio.CancelledError
+async def test_user_can_cancel_active_recording_without_transcription_or_answer() -> None:
+    class BlockingRecorder:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = False
 
-    terminal = CompanionTerminal(recorder=CancelledRecorder())
+        async def record(self) -> bytes:
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        raise AssertionError("cancellation must not call Core")
+
+    recorder = BlockingRecorder()
+    terminal = CompanionTerminal(recorder=recorder)
     terminal._messages = cast(Any, MessageSink())
     terminal._enter_review("item-1")
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
 
-    with pytest.raises(asyncio.CancelledError):
-        await terminal._record_review_answer()
+    await terminal.action_record_answer()
+    await recorder.started.wait()
+    assert terminal._waiting is True
+    assert terminal._input.disabled is True
+    assert [str(button.label) for button in terminal._action_buttons] == [
+        "Stop recording",
+        "",
+        "",
+    ]
 
+    await terminal.action_stop_recording()
+
+    assert recorder.cancelled is True
+    assert requests == []
     assert terminal._mode == InteractionMode.REVIEW
     assert terminal._active_review_item_id == "item-1"
+    assert terminal._waiting is False
+    assert terminal._input.disabled is False
+    assert [str(button.label) for button in terminal._action_buttons] == [
+        "Speak answer",
+        "",
+        "Stop review",
+    ]
+    assert any(
+        "still type" in str(value) for value in cast(MessageSink, terminal._messages).values
+    )
     await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mac_recorder_uses_raw_buffers_without_numpy_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RawStream:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs == {"samplerate": 10, "channels": 1, "dtype": "int16"}
+
+        def __enter__(self) -> "RawStream":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, frames: int) -> tuple[bytes, bool]:
+            return (b"\x01\x00" * frames, False)
+
+    sounddevice = SimpleNamespace(RawInputStream=RawStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+    recorder = MacMicrophoneRecorder(seconds=0.2, sample_rate=10)
+
+    audio = await recorder.record()
+
+    assert audio.startswith(b"RIFF")
+    assert b"\x01\x00\x01\x00" in audio
+    assert not hasattr(sounddevice, "rec")
 
 
 def assert_mode(terminal: CompanionTerminal, expected: InteractionMode) -> None:

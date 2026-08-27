@@ -70,6 +70,7 @@ class CompanionTerminal(App[None]):
         ("ctrl+g", "hint_intent", "Hint"),
         ("ctrl+r", "review_intent", "Review"),
         ("ctrl+m", "record_answer", "Speak answer"),
+        ("ctrl+x", "stop_recording", "Stop recording"),
         ("ctrl+u", "use_suggestion", "Use this"),
         ("escape", "cancel_intent", "Try myself"),
     ]
@@ -149,6 +150,7 @@ class CompanionTerminal(App[None]):
         self._cued_invitation_ids: set[str] = set()
         self._last_activity = time.monotonic()
         self._recorder = recorder or MacMicrophoneRecorder()
+        self._recording_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -189,7 +191,9 @@ class CompanionTerminal(App[None]):
                 InteractionMode.PRACTICE_PROMPT,
             )
         if action == "record_answer":
-            return self._mode == InteractionMode.REVIEW
+            return self._mode == InteractionMode.REVIEW and self._recording_task is None
+        if action == "stop_recording":
+            return self._recording_task is not None
         if action in {"help_intent", "hint_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
         if action == "use_suggestion":
@@ -224,9 +228,35 @@ class CompanionTerminal(App[None]):
         await self._run_guarded(self._run_review_intent)
 
     async def action_record_answer(self) -> None:
-        if self._waiting or self._mode != InteractionMode.REVIEW:
+        if (
+            self._waiting
+            or self._mode != InteractionMode.REVIEW
+            or self._recording_task is not None
+        ):
             return
-        await self._run_guarded(self._record_review_answer)
+        self._recording_task = asyncio.create_task(self._run_recording())
+        self._refresh_action_buttons()
+
+    async def _run_recording(self) -> None:
+        try:
+            await self._run_guarded(self._record_review_answer)
+        finally:
+            self._recording_task = None
+            self._refresh_action_buttons()
+
+    async def action_stop_recording(self) -> None:
+        task = self._recording_task
+        if task is None:
+            return
+        cancel = getattr(self._recorder, "cancel", None)
+        if callable(cancel):
+            cancel()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._messages.write("[system] Recording cancelled. You can still type your answer.")
 
     async def _record_review_answer(self) -> None:
         self._messages.write("[system] Recording for 5 seconds…")
@@ -276,6 +306,10 @@ class CompanionTerminal(App[None]):
             self._messages.write("Cancelled.")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        action_name = self._button_actions.get(event.button.id or "")
+        if action_name == "stop_recording":
+            await self.action_stop_recording()
+            return
         if self._waiting:
             return
         if event.button.id in {"onboarding-save", "onboarding-defaults", "onboarding-skip"}:
@@ -290,7 +324,6 @@ class CompanionTerminal(App[None]):
             decision = decisions[event.button.id or ""]
             await self._run_guarded(lambda: self._respond_to_invitation(decision))
             return
-        action_name = self._button_actions.get(event.button.id or "")
         if action_name is None:
             return
         await self.run_action(action_name)
@@ -410,6 +443,8 @@ class CompanionTerminal(App[None]):
         ):
             return [None, None, ("Cancel", "cancel_intent")]
         if self._mode == InteractionMode.REVIEW:
+            if self._recording_task is not None:
+                return [("Stop recording", "stop_recording"), None, None]
             return [("Speak answer", "record_answer"), None, ("Stop review", "cancel_intent")]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
