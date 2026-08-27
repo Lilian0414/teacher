@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, RichLog, Static
+from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
 from companion.settings import get_settings
 
@@ -55,6 +55,9 @@ class CompanionTerminal(App[None]):
         dock: bottom;
     }
     #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
+    #onboarding { height: auto; border: round $success; padding: 0 1; display: none; }
+    #onboarding Select { width: 1fr; margin-right: 1; }
+    #onboarding-actions { height: 3; }
     """
 
     # Exact key choices are flexible (see M3.5 issue): Ctrl+I is avoided
@@ -96,6 +99,36 @@ class CompanionTerminal(App[None]):
             Button("Later", id="invitation-later"),
             Button("Not today", id="invitation-dismiss"),
         ]
+        self._onboarding_corrections = Select(
+            [
+                ("Gentle corrections — only important mistakes", "light"),
+                ("Balanced corrections — helpful, without interrupting too much", "normal"),
+                ("Detailed corrections — point out most mistakes", "intensive"),
+            ],
+            value="normal",
+            id="onboarding-corrections",
+        )
+        self._onboarding_cadence = Select(
+            [
+                ("Rare reminders — give me plenty of space", "rare"),
+                ("Occasional reminders — a balanced pace", "normal"),
+                ("Frequent reminders — keep me practicing", "frequent"),
+            ],
+            value="normal",
+            id="onboarding-cadence",
+        )
+        self._onboarding = Vertical(
+            Static("Welcome! Choose how Teacher should support you (you can change this later)."),
+            self._onboarding_corrections,
+            self._onboarding_cadence,
+            Horizontal(
+                Button("Save choices", id="onboarding-save", variant="success"),
+                Button("Use defaults", id="onboarding-defaults"),
+                Button("Skip", id="onboarding-skip"),
+                id="onboarding-actions",
+            ),
+            id="onboarding",
+        )
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
         self._active_review_item_id: str | None = None
@@ -117,6 +150,7 @@ class CompanionTerminal(App[None]):
         with Vertical():
             yield self._status
             yield self._messages
+            yield self._onboarding
             yield self._invitation
             with Horizontal(id="invitation-actions"):
                 yield from self._invitation_buttons
@@ -131,6 +165,7 @@ class CompanionTerminal(App[None]):
         self.set_interval(30, self.check_proactive_invitation)
         self._hide_invitation()
         state = await self.refresh_state()
+        await self._show_onboarding_if_needed()
         await self.ensure_conversation()
         self._messages.write(self._startup_message(state))
 
@@ -210,6 +245,9 @@ class CompanionTerminal(App[None]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._waiting:
+            return
+        if event.button.id in {"onboarding-save", "onboarding-defaults", "onboarding-skip"}:
+            await self._run_guarded(lambda: self._complete_onboarding(event.button.id or ""))
             return
         decisions = {
             "invitation-start": "start",
@@ -392,7 +430,9 @@ class CompanionTerminal(App[None]):
         if not raw:
             return
         self._messages.write(f"> {raw}")
-        if self._mode == InteractionMode.AWAITING_HELP_SENTENCE:
+        if raw == "/preferences" or raw.startswith("/preferences "):
+            await self._run_guarded(lambda: self._handle_preferences(raw))
+        elif self._mode == InteractionMode.AWAITING_HELP_SENTENCE:
             await self._run_guarded(lambda: self._run_help_capture(raw))
         elif self._mode == InteractionMode.AWAITING_HINT_SENTENCE:
             await self._run_guarded(lambda: self._run_hint_capture(raw))
@@ -404,6 +444,84 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._submit_review_answer(raw))
         else:
             await self._run_guarded(lambda: self._send_chat_message(raw))
+
+    async def _show_onboarding_if_needed(self) -> None:
+        try:
+            response = await self._client.post("/v1/preferences/onboarding/offer")
+            response.raise_for_status()
+            if response.json().get("should_offer"):
+                self._write_onboarding()
+        except (httpx.HTTPError, ValueError):
+            return
+
+    def _write_onboarding(self) -> None:
+        self._messages.write(
+            "Welcome! A few optional choices are ready below. Choose how much correction and "
+            "how often Teacher should invite you to practice, use defaults, or skip. "
+            "You can keep chatting now and change preferences later."
+        )
+        self._onboarding.display = True
+
+    async def _complete_onboarding(self, action: str) -> None:
+        if action == "onboarding-save":
+            corrections = self._onboarding_corrections.value
+            cadence = self._onboarding_cadence.value
+            response = await self._client.patch(
+                "/v1/preferences",
+                json={"correction_style": corrections, "proactive_cadence": cadence},
+            )
+            confirmation = "Preferences saved."
+        else:
+            response = await self._client.post("/v1/preferences/reset")
+            confirmation = (
+                "Using default preferences."
+                if action == "onboarding-defaults"
+                else "Setup skipped."
+            )
+        response.raise_for_status()
+        self._onboarding.display = False
+        self._messages.write(confirmation)
+
+    async def _handle_preferences(self, raw: str) -> None:
+        parts = raw.split()
+        if len(parts) == 1:
+            response = await self._client.get("/v1/preferences")
+        elif parts[1] in {"defaults", "skip", "reset"}:
+            response = await self._client.post("/v1/preferences/reset")
+        elif parts[1] == "onboard" and len(parts) == 2:
+            response = await self._client.post("/v1/preferences/onboarding/restart")
+            response.raise_for_status()
+            if response.json().get("should_offer"):
+                self._write_onboarding()
+            return
+        elif len(parts) == 4 and parts[1] == "set":
+            key, value = parts[2], parts[3]
+            payload: dict[str, object]
+            if key in {"active_hours", "quiet_hours"}:
+                start, separator, end = value.partition("-")
+                if not separator:
+                    raise ValueError("Hours must use HH:MM-HH:MM")
+                payload = {f"{key}_start": start, f"{key}_end": end}
+            elif key == "sound_enabled":
+                if value.lower() not in {"true", "false", "on", "off"}:
+                    raise ValueError("sound_enabled must be true/false or on/off")
+                payload = {key: value.lower() in {"true", "on"}}
+            else:
+                payload = {key: value}
+            response = await self._client.patch("/v1/preferences", json=payload)
+        else:
+            raise ValueError("Use /preferences [defaults|reset|onboard|set NAME VALUE]")
+        response.raise_for_status()
+        profile = cast(dict[str, Any], response.json())
+        self._messages.write(
+            "Preferences: "
+            f"corrections={profile['correction_style']}, cadence={profile['proactive_cadence']}, "
+            f"active={profile.get('active_hours_start') or '-'}–"
+            f"{profile.get('active_hours_end') or '-'}, quiet="
+            f"{profile.get('quiet_hours_start') or '-'}–{profile.get('quiet_hours_end') or '-'}, "
+            f"practice={profile['practice_balance']}, sound={profile['sound_enabled']} "
+            "(sound is saved for future audio support)."
+        )
 
     def _can_present_invitation(self) -> bool:
         return (

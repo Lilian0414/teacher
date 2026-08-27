@@ -77,10 +77,10 @@ def test_proactive_http_flow_is_persistent_and_safe_for_duplicate_decisions() ->
     app.dependency_overrides[get_proactive_service] = override
     with TestClient(app) as client:
         first = client.post(
-            "/v1/proactive/check", json={"idle_seconds": 0, "can_present": True}
+            "/v1/proactive/check", json={"idle_seconds": 1800, "can_present": True}
         ).json()["invitation"]
         repeated = client.post(
-            "/v1/proactive/check", json={"idle_seconds": 99, "can_present": True}
+            "/v1/proactive/check", json={"idle_seconds": 9999, "can_present": True}
         ).json()["invitation"]
         missing_conversation = client.post(
             f"/v1/proactive/invitations/{first['id']}/respond",
@@ -133,7 +133,7 @@ async def test_conversation_practice_reuses_occurrence_and_completion_is_idempot
         clock=lambda: now,
     )
     conversation = conversation_service.create_conversation()
-    invitation = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    invitation = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert invitation is not None
     service.respond(invitation.id, InvitationDecision.START, conversation.id)
     turn = await conversation_service.send_user_message(
@@ -181,7 +181,7 @@ def test_started_practice_can_be_abandoned_but_not_completed_with_foreign_eviden
         settings=Settings(timezone="UTC", proactive_conversation_idle_seconds=0),
         clock=lambda: now,
     )
-    invitation = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    invitation = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert invitation is not None
     conversation = ConversationRepository(session).create_conversation(
         user_id="default", started_at=now
@@ -220,7 +220,7 @@ def test_start_requires_owned_conversation_and_binds_atomically() -> None:
         ),
         clock=lambda: now,
     )
-    invitation = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    invitation = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert invitation is not None
 
     with pytest.raises(ValueError, match="required"):
@@ -269,7 +269,7 @@ async def test_restart_reconciliation_is_exact_deterministic_and_idempotent() ->
     )
 
     no_answer_conversation = conversations.create_conversation()
-    no_answer = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    no_answer = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert no_answer is not None
     service.respond(no_answer.id, InvitationDecision.START, no_answer_conversation.id)
     assert service.reconcile_accepted_practices()[0].status == "abandoned"
@@ -277,7 +277,7 @@ async def test_restart_reconciliation_is_exact_deterministic_and_idempotent() ->
 
     clock[0] += timedelta(minutes=61)
     partial_conversation = conversations.create_conversation()
-    partial = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    partial = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert partial is not None
     service.respond(partial.id, InvitationDecision.START, partial_conversation.id)
     user = ConversationRepository(session).add_message(
@@ -296,7 +296,7 @@ async def test_restart_reconciliation_is_exact_deterministic_and_idempotent() ->
 
     clock[0] += timedelta(minutes=61)
     complete_conversation = conversations.create_conversation()
-    complete = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    complete = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert complete is not None
     service.respond(complete.id, InvitationDecision.START, complete_conversation.id)
     turn = await conversations.send_user_message(
@@ -312,9 +312,9 @@ async def test_restart_reconciliation_is_exact_deterministic_and_idempotent() ->
     assert service.reconcile_accepted_practices() == []
     assert session.query(LearningOccurrence).count() == 0
 
-    clock[0] += timedelta(minutes=61)
+    clock[0] += timedelta(days=1, minutes=61)
     ambiguous_conversation = conversations.create_conversation()
-    ambiguous = service.check(ProactiveCheckRequest(idle_seconds=0, can_present=True))
+    ambiguous = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert ambiguous is not None
     service.respond(ambiguous.id, InvitationDecision.START, ambiguous_conversation.id)
     await conversations.send_user_message(

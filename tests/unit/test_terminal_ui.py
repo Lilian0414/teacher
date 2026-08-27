@@ -30,6 +30,109 @@ def assert_mode(terminal: CompanionTerminal, expected: InteractionMode) -> None:
 
 
 @pytest.mark.asyncio
+async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> None:
+    should_offer = iter((True, False))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/preferences/onboarding/offer":
+            assert request.method == "POST"
+            return httpx.Response(200, json={"should_offer": next(should_offer)})
+        if request.url.path == "/v1/conversations/conversation-1/messages":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user_message": {"id": "user-1"},
+                    "assistant_message": {"id": "assistant-1", "content": "Hello!"},
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    messages = cast(MessageSink, terminal._messages)
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._show_onboarding_if_needed()
+    assert len(messages.values) == 1
+    assert "keep chatting" in messages.values[0]
+    assert "correction" in messages.values[0]
+    assert "use defaults, or skip" in messages.values[0]
+    assert terminal._mode == InteractionMode.NORMAL
+
+    terminal._conversation_id = "conversation-1"
+    await terminal._send_chat_message("Hello")
+    assert "assistant: Hello!" in messages.values
+
+    await terminal._show_onboarding_if_needed()
+    assert sum("keep chatting" in message for message in messages.values) == 1
+    assert terminal._mode == InteractionMode.NORMAL
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "method", "path", "expected_message"),
+    [
+        ("onboarding-save", "PATCH", "/v1/preferences", "Preferences saved."),
+        ("onboarding-defaults", "POST", "/v1/preferences/reset", "Using default preferences."),
+        ("onboarding-skip", "POST", "/v1/preferences/reset", "Setup skipped."),
+    ],
+)
+async def test_onboarding_choices_defaults_and_skip(
+    action: str, method: str, path: str, expected_message: str
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    terminal = make_terminal()
+    messages = cast(MessageSink, terminal._messages)
+    terminal._onboarding_corrections.value = "intensive"
+    terminal._onboarding_cadence.value = "rare"
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._complete_onboarding(action)
+
+    assert [(request.method, request.url.path) for request in requests] == [(method, path)]
+    if action == "onboarding-save":
+        assert requests[0].content == b'{"correction_style":"intensive","proactive_cadence":"rare"}'
+    assert expected_message in messages.values
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_preferences_onboard_restarts_and_displays_panel() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={"should_offer": True})
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._handle_preferences("/preferences onboard")
+
+    assert requests == [("POST", "/v1/preferences/onboarding/restart")]
+    assert terminal._onboarding.display is True
+    assert any(
+        "keep chatting" in message for message in cast(MessageSink, terminal._messages).values
+    )
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_answers() -> None:
     requests: list[str] = []
 
