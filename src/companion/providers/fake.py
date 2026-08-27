@@ -6,6 +6,7 @@ from companion.memory.schemas import (
     MemoryCategory,
     MemoryExtractionRequest,
 )
+from companion.providers.errors import LLMTemporaryError
 from companion.providers.schemas import (
     ChatRequest,
     ChatResponse,
@@ -70,3 +71,17 @@ class FakeLLMProvider:
         self, request: LearningSignalRequest
     ) -> LearningSignalCandidate | None:
         return self._learning_signal
+
+
+class FailOnceFakeLLMProvider(FakeLLMProvider):
+    """UAT provider that fails only its first assistant chat call per process."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._chat_failed = False
+
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        if not self._chat_failed:
+            self._chat_failed = True
+            raise LLMTemporaryError("Intentional fail-once UAT assistant failure")
+        return await super().chat(request)

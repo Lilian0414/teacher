@@ -105,8 +105,9 @@ Save evidence with timestamps and section numbers. Redact secrets and unnecessar
   explicitly in `Asia/Taipei`.
 - **API evidence:** Record command names/statuses and review question/item ID; record the submission
   result, correctness, stage, next due instant, and whether another question was returned.
-- **DB evidence:** Record learning item/occurrence/attempt IDs, source IDs, submitted outcome,
-  stage-before/stage-after, and next-review timestamp.
+- **DB evidence:** Record the directly created learning item and the review attempt, submitted
+  outcome, stage-before/stage-after, and next-review timestamp. Record occurrence provenance and
+  source message IDs only if a separate conversation-derived learning signal actually created one.
 - **PASS/FAIL:** ____
 - **Notes/evidence:** ____
 
@@ -126,14 +127,18 @@ Save evidence with timestamps and section numbers. Redact secrets and unnecessar
 
 ### 4. Proactive end-to-end and interruption recovery
 
-- **User action:** Meet an invitation eligibility condition, accept it, begin practice, interrupt or
-  restart once, resume, submit an answer, and also exercise Later and Not today.
-- **Expected UI:** Exactly one pending invitation is shown; accepted practice resumes without
-  duplicating messages; the completed outcome is visible; snooze/dismiss suppress as documented.
-- **API evidence:** Record check/respond/finalize statuses, invitation ID/status/outcome,
-  conversation and message IDs, plus the recovered pending state after restart.
+- **User action:** Meet an invitation eligibility condition and accept it. Test restart with exactly
+  one durable post-acceptance user+assistant pair, then separately test missing, partial, invalid,
+  and ambiguous durable evidence (reset the database/profile between cases). Also exercise Later
+  and Not today. Do not continue incomplete accepted practice after restart.
+- **Expected UI:** Exactly one pending invitation is shown. Restart reconciliation completes only
+  the case with one unambiguous durable user+assistant pair. Every other case becomes terminal
+  `abandoned`; no invitation remains orphaned in `accepted`. Snooze/dismiss suppress as documented.
+- **API evidence:** Record check/respond and reconciliation/finalize statuses, invitation
+  ID/status/outcome, conversation/message IDs, and post-restart state for every case.
 - **DB evidence:** Record invitation transition fields and linked conversation/message/learning
-  occurrence/item IDs; confirm one finalized outcome and no duplicate practice messages.
+  occurrence/item IDs. Confirm the exact pair finalizes once; missing/partial/invalid/ambiguous
+  cases are `abandoned` and create no invented learning occurrence; count `accepted` rows as zero.
 - **PASS/FAIL:** ____
 - **Notes/evidence:** ____
 
@@ -155,14 +160,31 @@ Save evidence with timestamps and section numbers. Redact secrets and unnecessar
 
 ### 6. `/say` and assistant retry across say, chat, and practice
 
-- **User action:** Run `/say` and confirm translation plus reply; for ordinary chat, `/say`, and
-  proactive practice, induce one assistant-provider failure and invoke Retry after recovery.
+Use the deterministic UAT profile for this section. Stop `companion`, then start it from the same
+activated shell and database with:
+
+```bash
+LLM_PROVIDER=fake_fail_once companion
+```
+
+The fail-once state is process-local. For **each** scenario below, stop that `companion` process
+with Ctrl-C and run the command again. This reset ensures its first assistant `chat()` call fails.
+For `/say`, language translation/help remains successful and the translated user message reaches
+persistence before that assistant failure. Switch back to the real-provider acceptance profile
+after all three deterministic retry scenarios by restarting with `LLM_PROVIDER=groq companion`.
+
+- **User action:** In separate freshly restarted `fake_fail_once` processes, run ordinary chat,
+  `/say`, and proactive practice. Confirm the first assistant call fails, invoke Retry to succeed,
+  then invoke Retry once more. For `/say`, confirm translation and user-message persistence precede
+  the assistant failure.
 - **Expected UI:** Each user message is stored once; failure is clear and retryable; retry adds one
   assistant response without duplicating the user turn; practice can then finalize once.
-- **API evidence:** Record initial failure and retry status for each flow, conversation/user-message
-  IDs, returned assistant-message ID, conflict status if retried again, and practice finalize result.
+- **API evidence:** Record initial retryable failure and successful retry for each flow,
+  conversation/user-message IDs, returned assistant-message ID, and practice finalize result. The
+  repeated retry must also succeed and return/reuse the same assistant-message ID, not conflict.
 - **DB evidence:** For each flow record exactly one user and one successful assistant row linked to
-  the conversation; record practice invitation links/outcome and any learning occurrence.
+  the conversation before and after the repeated retry (unchanged row counts); record practice
+  invitation links/outcome and any learning occurrence that was actually created.
 - **PASS/FAIL:** ____
 - **Notes/evidence:** ____
 
