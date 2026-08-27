@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from companion.persistence.database import make_engine
 from companion.settings import Settings
@@ -35,6 +36,23 @@ def test_example_environment_enables_documented_semantic_profile(
 
 def test_default_groq_model_is_supported_replacement() -> None:
     assert Settings().groq_model == "openai/gpt-oss-20b"
+
+
+def test_proactive_poll_interval_defaults_to_30_seconds() -> None:
+    assert Settings(_env_file=None).proactive_poll_interval_seconds == 30  # type: ignore[call-arg]
+
+
+def test_proactive_poll_interval_reads_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMPANION_PROACTIVE_POLL_INTERVAL_SECONDS", "5")
+
+    assert Settings(_env_file=None).proactive_poll_interval_seconds == 5  # type: ignore[call-arg]
+
+
+def test_proactive_poll_interval_rejects_values_below_five() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, proactive_poll_interval_seconds=4)  # type: ignore[call-arg]
 
 
 def test_default_database_is_absolute_and_cwd_independent(

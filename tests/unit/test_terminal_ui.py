@@ -30,6 +30,48 @@ def assert_mode(terminal: CompanionTerminal, expected: InteractionMode) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("configured_interval", "expected_interval"), [(None, 30), ("5", 5)])
+async def test_on_mount_uses_configured_proactive_poll_interval(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_interval: str | None,
+    expected_interval: int,
+) -> None:
+    if configured_interval is None:
+        monkeypatch.delenv("COMPANION_PROACTIVE_POLL_INTERVAL_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("COMPANION_PROACTIVE_POLL_INTERVAL_SECONDS", configured_interval)
+    get_settings.cache_clear()
+    terminal = make_terminal()
+    scheduled: list[tuple[float, object]] = []
+
+    def record_interval(interval: float, callback: object) -> None:
+        scheduled.append((interval, callback))
+
+    async def refresh_state() -> dict[str, object]:
+        return {}
+
+    async def do_nothing() -> None:
+        return None
+
+    monkeypatch.setattr(terminal, "set_interval", record_interval)
+    monkeypatch.setattr(terminal, "refresh_state", refresh_state)
+    monkeypatch.setattr(terminal, "_show_onboarding_if_needed", do_nothing)
+    monkeypatch.setattr(terminal, "ensure_conversation", do_nothing)
+    monkeypatch.setattr(terminal, "_startup_message", lambda state: "ready")
+
+    try:
+        await terminal.on_mount()
+    finally:
+        get_settings.cache_clear()
+        await terminal._client.aclose()
+
+    assert scheduled == [
+        (5, terminal.refresh_state),
+        (expected_interval, terminal.check_proactive_invitation),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> None:
     should_offer = iter((True, False))
 

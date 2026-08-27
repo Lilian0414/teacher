@@ -162,7 +162,10 @@ class CompanionTerminal(App[None]):
     async def on_mount(self) -> None:
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
-        self.set_interval(30, self.check_proactive_invitation)
+        self.set_interval(
+            get_settings().proactive_poll_interval_seconds,
+            self.check_proactive_invitation,
+        )
         self._hide_invitation()
         state = await self.refresh_state()
         await self._show_onboarding_if_needed()
