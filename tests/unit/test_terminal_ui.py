@@ -1,10 +1,13 @@
 import asyncio
+import os
+import time
 from typing import Any, cast
 
 import httpx
 import pytest
 from textual.widgets import Input
 
+from companion.settings import get_settings
 from terminal_ui.app import CompanionTerminal, InteractionMode
 
 
@@ -745,8 +748,48 @@ def test_review_question_and_feedback_are_rendered_without_early_answers() -> No
     assert "Incorrect" in feedback
     assert "Prompt: 我很累" in feedback
     assert "Your answer: sleepy" in feedback
-    assert "Tue, Aug 11 at 12:00 PM" in feedback
+    assert "Tue, Aug 11 at 8:00 PM Asia/Taipei" in feedback
     assert "Complete" in feedback
+
+
+@pytest.mark.parametrize("host_timezone", ["UTC", "Asia/Taipei"])
+def test_review_time_uses_product_timezone_not_host_timezone(
+    host_timezone: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_timezone = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", host_timezone)
+        if hasattr(time, "tzset"):
+            time.tzset()
+        monkeypatch.setenv("COMPANION_TIMEZONE", "Asia/Taipei")
+        get_settings.cache_clear()
+
+        rendered = CompanionTerminal._format_review_time("2026-08-11T12:00:00+00:00")
+
+        assert rendered == "Tue, Aug 11 at 8:00 PM Asia/Taipei"
+    finally:
+        if original_timezone is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_timezone)
+        if hasattr(time, "tzset"):
+            time.tzset()
+        get_settings.cache_clear()
+
+
+def test_review_time_changes_with_product_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COMPANION_TIMEZONE", "UTC")
+    get_settings.cache_clear()
+    utc_rendered = CompanionTerminal._format_review_time("2026-08-11T12:00:00+00:00")
+    monkeypatch.setenv("COMPANION_TIMEZONE", "Asia/Taipei")
+    get_settings.cache_clear()
+
+    taipei_rendered = CompanionTerminal._format_review_time("2026-08-11T12:00:00+00:00")
+
+    assert utc_rendered == "Tue, Aug 11 at 12:00 PM UTC"
+    assert taipei_rendered == "Tue, Aug 11 at 8:00 PM Asia/Taipei"
+    assert utc_rendered != taipei_rendered
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from companion.providers.errors import (
     LLMTemporaryError,
     LLMTimeoutError,
 )
-from companion.providers.fake import FakeLLMProvider
+from companion.providers.fake import FailOnceFakeLLMProvider, FakeLLMProvider
 from companion.providers.groq import GroqLLMProvider
 from companion.providers.schemas import (
     ChatMessage,
@@ -83,6 +83,21 @@ async def test_fake_llm_provider_language_help_schema() -> None:
     assert response.natural_expression
     assert len(response.alternatives) <= 2
     assert response.notes_zh
+
+
+@pytest.mark.asyncio
+async def test_fail_once_provider_fails_only_first_chat_without_consuming_help() -> None:
+    provider = FailOnceFakeLLMProvider()
+    help_response = await provider.provide_language_help(
+        LanguageHelpRequest(mode=LanguageHelpMode.SAY, content="今天很累")
+    )
+    request = ChatRequest(messages=[ChatMessage(role="user", content="I had a difficult day.")])
+
+    assert help_response.natural_expression == "I had a difficult day at school."
+    with pytest.raises(LLMTemporaryError, match="Intentional fail-once") as exc_info:
+        await provider.chat(request)
+    assert exc_info.value.retryable is True
+    assert (await provider.chat(request)).content
 
 
 @pytest.mark.asyncio

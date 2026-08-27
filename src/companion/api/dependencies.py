@@ -17,7 +17,7 @@ from companion.persistence.repositories import AvailabilityRepository
 from companion.proactive import ProactiveRepository, ProactiveService
 from companion.providers.embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from companion.providers.errors import LLMConfigurationError
-from companion.providers.fake import FakeLLMProvider
+from companion.providers.fake import FailOnceFakeLLMProvider, FakeLLMProvider
 from companion.providers.groq import GroqLLMProvider
 from companion.providers.protocols import LLMProvider
 from companion.schemas.availability import LLMStatus
@@ -34,9 +34,9 @@ def get_llm_status() -> LLMStatus:
             configured=configured,
             status="key_present_unverified" if configured else "missing_api_key",
         )
-    if settings.llm_provider == "fake":
+    if settings.llm_provider in {"fake", "fake_fail_once"}:
         return LLMStatus(
-            provider="fake",
+            provider=settings.llm_provider,
             model=None,
             configured=True,
             status="usable",
@@ -66,6 +66,8 @@ def get_llm_provider() -> LLMProvider:
     settings = get_settings()
     if settings.llm_provider == "fake":
         return FakeLLMProvider()
+    if settings.llm_provider == "fake_fail_once":
+        return _get_fail_once_provider()
     if settings.llm_provider != "groq":
         raise LLMConfigurationError("Unsupported LLM_PROVIDER")
     return GroqLLMProvider(
@@ -74,6 +76,12 @@ def get_llm_provider() -> LLMProvider:
         base_url=settings.groq_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
     )
+
+
+@lru_cache(maxsize=1)
+def _get_fail_once_provider() -> FailOnceFakeLLMProvider:
+    # One process-scoped instance lets an HTTP retry succeed. Restarting Core resets it.
+    return FailOnceFakeLLMProvider()
 
 
 @lru_cache

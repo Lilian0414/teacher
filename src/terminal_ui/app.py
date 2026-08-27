@@ -1,9 +1,10 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 from textual.app import App, ComposeResult
@@ -903,7 +904,11 @@ class CompanionTerminal(App[None]):
             review_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return value
-        return review_at.astimezone().strftime("%a, %b %-d at %-I:%M %p")
+        if review_at.tzinfo is None:
+            review_at = review_at.replace(tzinfo=UTC)
+        timezone_name = get_settings().timezone
+        local_review_at = review_at.astimezone(ZoneInfo(timezone_name))
+        return local_review_at.strftime(f"%a, %b %-d at %-I:%M %p {timezone_name}")
 
     @staticmethod
     def _format_memory(memory: dict[str, Any]) -> str:
