@@ -5,6 +5,8 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from rich.console import Console
+from rich.markdown import Markdown
 from textual.widgets import Input
 
 from companion.settings import get_settings
@@ -13,10 +15,18 @@ from terminal_ui.app import CompanionTerminal, InteractionMode
 
 class MessageSink:
     def __init__(self) -> None:
-        self.values: list[str] = []
+        self.values: list[Any] = []
 
-    def write(self, value: str) -> None:
+    def write(self, value: Any) -> None:
         self.values.append(value)
+
+
+def render(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    console = Console(record=True, width=100, color_system=None)
+    console.print(value)
+    return console.export_text().rstrip()
 
 
 def make_terminal() -> CompanionTerminal:
@@ -106,10 +116,10 @@ async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> No
 
     terminal._conversation_id = "conversation-1"
     await terminal._send_chat_message("Hello")
-    assert "assistant: Hello!" in messages.values
+    assert any(render(value) == "assistant: Hello!" for value in messages.values)
 
     await terminal._show_onboarding_if_needed()
-    assert sum("keep chatting" in message for message in messages.values) == 1
+    assert sum("keep chatting" in render(message) for message in messages.values) == 1
     assert terminal._mode == InteractionMode.NORMAL
     await terminal._client.aclose()
 
@@ -195,6 +205,8 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
             )
         if request.url.path == "/v1/conversations":
             return httpx.Response(200, json={"id": "conversation-1"})
+        if request.url.path == "/v1/preferences":
+            return httpx.Response(200, json={"sound_enabled": False})
         if request.url.path.endswith("/respond"):
             return httpx.Response(
                 200,
@@ -221,6 +233,7 @@ async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_a
     assert terminal._mode == InteractionMode.PRACTICE_PROMPT
     assert requests == [
         "/v1/proactive/check",
+        "/v1/preferences",
         "/v1/conversations",
         "/v1/proactive/invitations/invite-1/respond",
     ]
@@ -767,7 +780,7 @@ async def test_say_partial_retry_preserves_evidence_until_assistant_succeeds() -
     assert terminal._pending_assistant_retry is not None
     await terminal._retry_assistant_reply()
     assert terminal._pending_assistant_retry is None
-    assert messages[-1] == "assistant: Rest well."
+    assert render(messages[-1]) == "assistant: Rest well."
     assert requests == [
         "/v1/commands/execute",
         "/v1/conversations/conversation-1/messages/user-1/retry-assistant",
@@ -1109,14 +1122,17 @@ async def test_status_bar_shows_up_to_date_when_no_items_due() -> None:
 
 
 def test_proactive_summary_uses_core_reason_and_threshold() -> None:
-    assert CompanionTerminal._format_proactive_status(
-        {
-            "cadence": "normal",
-            "reason": "insufficient_idle",
-            "idle_threshold_seconds": 600,
-            "due_review_count": 0,
-        }
-    ) == "Proactive: Normal · May invite after about 10 minutes of inactivity."
+    assert (
+        CompanionTerminal._format_proactive_status(
+            {
+                "cadence": "normal",
+                "reason": "insufficient_idle",
+                "idle_threshold_seconds": 600,
+                "due_review_count": 0,
+            }
+        )
+        == "Proactive: Normal · May invite after about 10 minutes of inactivity."
+    )
     assert "2 reviews due — next invite prioritizes review" in (
         CompanionTerminal._format_proactive_status(
             {"cadence": "frequent", "reason": "eligible", "due_review_count": 2}
@@ -1145,17 +1161,13 @@ def test_proactive_summary_distinguishes_runtime_policy_and_paused_ui() -> None:
             "due_review_count": 0,
         }
     )
-    assert completed == (
-        "Proactive: Frequent · Teacher won't interrupt the current activity."
-    )
+    assert completed == ("Proactive: Frequent · Teacher won't interrupt the current activity.")
     assert "ready" not in completed
 
 
 def test_proactive_action_confirmations_use_core_boundary() -> None:
     payload = {"invitation": {"suppress_until": "2026-08-21T17:42:00+00:00"}}
-    assert "before 01:42" in CompanionTerminal._format_invitation_suppression(
-        payload, "snooze"
-    )
+    assert "before 01:42" in CompanionTerminal._format_invitation_suppression(payload, "snooze")
     assert "until 01:42" in CompanionTerminal._format_invitation_suppression(
         payload, "dismiss_today"
     )
@@ -1280,8 +1292,8 @@ async def test_use_this_sends_the_exact_displayed_expression_without_retranslati
     assert terminal._mode == InteractionMode.NORMAL
     assert terminal._pending_help_content is None
     assert terminal._pending_help_expression is None
-    assert any("You said: I skipped class today." in value for value in sink.values)
-    assert any("assistant: That happens sometimes." in value for value in sink.values)
+    assert any("You said: I skipped class today." in render(value) for value in sink.values)
+    assert any("assistant: That happens sometimes." in render(value) for value in sink.values)
 
 
 @pytest.mark.asyncio
@@ -1423,3 +1435,173 @@ def test_terminal_uses_configured_core_port(monkeypatch: pytest.MonkeyPatch) -> 
     assert terminal._core_url == "http://127.0.0.1:9123"
     asyncio.run(terminal._client.aclose())
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sound_enabled", "expected_bells"), [(True, 1), (False, 0)])
+async def test_presented_invitation_honors_sound_preference(
+    monkeypatch: pytest.MonkeyPatch, sound_enabled: bool, expected_bells: int
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/proactive/check":
+            return httpx.Response(
+                200, json={"invitation": {"id": "invite-1", "kind": "conversation"}}
+            )
+        if request.url.path == "/v1/preferences":
+            return httpx.Response(200, json={"sound_enabled": sound_enabled})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    bells: list[None] = []
+    monkeypatch.setattr(terminal, "bell", lambda: bells.append(None))
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal.check_proactive_invitation()
+
+    assert terminal._pending_invitation is not None
+    assert len(bells) == expected_bells
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_invitation_cue_is_deduplicated_by_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        assert request.url.path == "/v1/preferences"
+        requests += 1
+        return httpx.Response(200, json={"sound_enabled": True})
+
+    terminal = make_terminal()
+    bells: list[None] = []
+    monkeypatch.setattr(terminal, "bell", lambda: bells.append(None))
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._cue_invitation({"id": "invite-1"})
+    await terminal._cue_invitation({"id": "invite-1"})
+
+    assert len(bells) == 1
+    assert requests == 1
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_preference_failure_is_silent_and_invitation_still_presents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/proactive/check":
+            return httpx.Response(200, json={"invitation": {"id": "invite-1", "kind": "review"}})
+        return httpx.Response(503)
+
+    terminal = make_terminal()
+    bells: list[None] = []
+    monkeypatch.setattr(terminal, "bell", lambda: bells.append(None))
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal.check_proactive_invitation()
+
+    assert terminal._pending_invitation == {"id": "invite-1", "kind": "review"}
+    assert terminal._invitation.display is True
+    assert bells == []
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_no_presentable_invitation_does_not_fetch_preferences_or_bell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(200, json={"invitation": {"id": "invite-1", "kind": "review"}})
+
+    terminal = make_terminal()
+    terminal._waiting = True
+    bells: list[None] = []
+    monkeypatch.setattr(terminal, "bell", lambda: bells.append(None))
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal.check_proactive_invitation()
+
+    assert requests == ["/v1/proactive/check"]
+    assert terminal._pending_invitation is None
+    assert bells == []
+    await terminal._client.aclose()
+
+
+def test_assistant_helper_writes_markdown_without_rewriting_source() -> None:
+    terminal = make_terminal()
+    source = "**Salmon** is a good choice."
+
+    terminal._write_assistant(source)
+
+    written = cast(MessageSink, terminal._messages).values[-1]
+    assert isinstance(written, Markdown)
+    assert render(written) == "assistant: Salmon is a good choice."
+    assert source == "**Salmon** is a good choice."
+
+
+@pytest.mark.asyncio
+async def test_normal_chat_and_retry_share_assistant_rendering_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        content = "Normal **reply**." if requests == 1 else "Retried **reply**."
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "user_message": {"id": "user-1"},
+                "assistant_message": {"id": f"assistant-{requests}", "content": content},
+            },
+        )
+
+    terminal = make_terminal()
+    rendered: list[str] = []
+    monkeypatch.setattr(terminal, "_write_assistant", rendered.append)
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+
+    await terminal._send_chat_message("hello")
+    terminal._pending_assistant_retry = {
+        "conversation_id": "conversation-1",
+        "user_message_id": "user-1",
+    }
+    await terminal._retry_assistant_reply()
+
+    assert rendered == ["Normal **reply**.", "Retried **reply**."]
+    await terminal._client.aclose()
+
+
+def test_plain_user_and_system_writes_remain_literal() -> None:
+    terminal = make_terminal()
+
+    terminal._messages.write("You said: [red]hello[/red]")
+    terminal._messages.write("[system] [red]hello[/red]")
+
+    assert cast(MessageSink, terminal._messages).values == [
+        "You said: [red]hello[/red]",
+        "[system] [red]hello[/red]",
+    ]
