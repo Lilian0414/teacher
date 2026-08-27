@@ -23,6 +23,7 @@ from companion.providers.groq import GroqLLMProvider
 from companion.providers.protocols import LLMProvider
 from companion.schemas.availability import LLMStatus
 from companion.settings import get_settings
+from companion.speech import GroqSpeechTranscriber, SpeechTranscriber
 
 
 def get_llm_status() -> LLMStatus:
@@ -74,6 +75,16 @@ def get_llm_provider() -> LLMProvider:
     return GroqLLMProvider(
         api_key=settings.groq_api_key,
         model=settings.groq_model,
+        base_url=settings.groq_base_url,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
+
+
+def get_speech_transcriber() -> SpeechTranscriber:
+    settings = get_settings()
+    return GroqSpeechTranscriber(
+        api_key=settings.groq_api_key,
+        model=settings.groq_stt_model,
         base_url=settings.groq_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
     )

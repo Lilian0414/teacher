@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from companion.api.schemas import (
     CommandRequest,
@@ -11,6 +11,7 @@ from companion.api.schemas import (
     ReviewSubmissionResponse,
     SendMessageRequest,
     SendMessageResponse,
+    TranscriptionResponse,
 )
 from companion.availability import AvailabilityService, OverrideRequest
 from companion.commands.parser import AVAILABLE_COMMANDS, CommandParser
@@ -51,11 +52,12 @@ from companion.proactive import (
     ProactiveService,
     ProactiveStatus,
 )
-from companion.providers.errors import LLMConfigurationError, LLMProviderError
+from companion.providers.errors import LLMConfigurationError, LLMProviderError, LLMRateLimitError
 from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest
 from companion.schemas.availability import AvailabilityState, StateResponse
 from companion.settings import get_settings
+from companion.speech import SpeechTranscriber
 
 from .dependencies import (
     get_availability_service,
@@ -66,6 +68,7 @@ from .dependencies import (
     get_memory_service,
     get_preferences_service,
     get_proactive_service,
+    get_speech_transcriber,
 )
 
 router = APIRouter()
@@ -76,6 +79,23 @@ MemoryDependency = Depends(get_memory_service)
 LearningDependency = Depends(get_learning_service)
 ProactiveDependency = Depends(get_proactive_service)
 PreferencesDependency = Depends(get_preferences_service)
+SpeechDependency = Depends(get_speech_transcriber)
+
+
+@router.post("/v1/speech/transcriptions")
+async def transcribe_audio(
+    request: Request,
+    audio: bytes = Body(media_type="audio/wav"),
+    transcriber: SpeechTranscriber = SpeechDependency,
+) -> TranscriptionResponse:
+    try:
+        transcript = await transcriber.transcribe(
+            audio, content_type=request.headers.get("content-type", "audio/wav")
+        )
+    except LLMProviderError as exc:
+        status = 429 if isinstance(exc, LLMRateLimitError) else 503
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return TranscriptionResponse(transcript=transcript)
 
 
 @router.get("/v1/preferences")
@@ -423,9 +443,7 @@ async def send_message(
     )
 
 
-@router.post(
-    "/v1/conversations/{conversation_id}/messages/{user_message_id}/retry-assistant"
-)
+@router.post("/v1/conversations/{conversation_id}/messages/{user_message_id}/retry-assistant")
 async def retry_assistant_reply(
     conversation_id: str,
     user_message_id: str,

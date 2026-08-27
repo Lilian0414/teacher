@@ -8,6 +8,7 @@ from companion.api.dependencies import (
     get_availability_service,
     get_learning_service,
     get_llm_provider,
+    get_speech_transcriber,
 )
 from companion.availability import AvailabilityService
 from companion.learning import LearningRepository, LearningService
@@ -15,6 +16,26 @@ from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
 from companion.providers.fake import FakeLLMProvider
+
+
+class FakeTranscriber:
+    async def transcribe(self, audio: bytes, *, content_type: str) -> str:
+        assert audio == b"wave"
+        assert content_type == "audio/wav"
+        return "I fell asleep."
+
+
+def test_speech_transcription_endpoint_is_core_owned_and_non_mutating() -> None:
+    app = create_app()
+    app.dependency_overrides[get_speech_transcriber] = lambda: FakeTranscriber()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/speech/transcriptions", content=b"wave", headers={"content-type": "audio/wav"}
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"transcript": "I fell asleep."}
 
 
 def test_health_and_state_endpoints() -> None:
