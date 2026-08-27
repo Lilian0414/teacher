@@ -38,6 +38,33 @@ def test_default_groq_model_is_supported_replacement() -> None:
     assert Settings().groq_model == "openai/gpt-oss-20b"
 
 
+def test_ordinary_settings_ignore_hostile_local_dotenv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text(
+        "COMPANION_USER_ID=hostile\n"
+        "COMPANION_TIMEZONE=Etc/UTC\n"
+        "COMPANION_DATABASE_URL=sqlite:////tmp/wrong.sqlite3\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings()
+
+    assert settings.user_id == "default"
+    assert settings.timezone == "Asia/Taipei"
+    assert settings.database_url != "sqlite:////tmp/wrong.sqlite3"
+
+
+def test_settings_can_explicitly_opt_into_dotenv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dotenv = tmp_path / ".env.explicit"
+    dotenv.write_text("COMPANION_USER_ID=explicit-user\n")
+    monkeypatch.delenv("COMPANION_USER_ID", raising=False)
+
+    assert Settings(_env_file=dotenv).user_id == "explicit-user"  # type: ignore[call-arg]
+
+
 def test_proactive_poll_interval_defaults_to_30_seconds() -> None:
     assert Settings(_env_file=None).proactive_poll_interval_seconds == 30  # type: ignore[call-arg]
 

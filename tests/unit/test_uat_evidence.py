@@ -17,3 +17,5 @@ def test_configuration_snapshot_redacts_credentials() -> None:
     assert "super-secret-embedding" not in serialized
     assert serialized.count("present (redacted)") == 2
     assert '"timezone": "Asia/Taipei"' in serialized
+    assert '"user_id": "default"' in serialized
+    assert '"core_url": "http://127.0.0.1:8000"' in serialized

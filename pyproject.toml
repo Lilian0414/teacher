@@ -21,6 +21,7 @@ companion-core = "companion.cli:core"
 companion-ui = "terminal_ui.app:run"
 companion = "companion.cli:local"
 companion-uat-evidence = "companion.uat_evidence:main"
+companion-uat = "companion.uat:main"
 
 [project.optional-dependencies]
 dev = [
