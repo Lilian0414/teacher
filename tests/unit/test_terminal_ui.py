@@ -249,7 +249,7 @@ async def test_mac_recorder_uses_raw_buffers_without_numpy_capture(
         def __init__(self, **kwargs: object) -> None:
             assert kwargs.keys() == {"samplerate", "channels", "dtype", "callback"}
             assert kwargs["samplerate"] == 10
-            self.callback = kwargs["callback"]
+            self.callback = cast(Any, kwargs["callback"])
 
         def start(self) -> None:
             self.callback(b"\x01\x00" * 2, 2, None, None)
@@ -276,7 +276,7 @@ async def test_mac_recorder_uses_raw_buffers_without_numpy_capture(
 async def test_mac_recorder_cancel_discards_audio(monkeypatch: pytest.MonkeyPatch) -> None:
     class RawStream:
         def __init__(self, **kwargs: object) -> None:
-            self.callback = kwargs["callback"]
+            self.callback = cast(Any, kwargs["callback"])
 
         def start(self) -> None:
             self.callback(b"\x01\x00", 1, None, None)
