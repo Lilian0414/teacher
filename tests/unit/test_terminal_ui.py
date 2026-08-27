@@ -109,6 +109,30 @@ async def test_onboarding_choices_defaults_and_skip(
 
 
 @pytest.mark.asyncio
+async def test_preferences_onboard_restarts_and_displays_panel() -> None:
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={"should_offer": True})
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._handle_preferences("/preferences onboard")
+
+    assert requests == [("POST", "/v1/preferences/onboarding/restart")]
+    assert terminal._onboarding.display is True
+    assert any(
+        "keep chatting" in message for message in cast(MessageSink, terminal._messages).values
+    )
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_proactive_poll_and_conversation_acceptance_are_local_until_user_answers() -> None:
     requests: list[str] = []
 

@@ -70,8 +70,9 @@ def test_onboarding_offer_is_persisted_once_and_can_be_explicitly_restarted() ->
 
     restarted = PreferencesService(PreferencesRepository(Session(engine)))
     assert restarted.offer_onboarding() is False
-    restarted.restart_onboarding()
-    assert restarted.offer_onboarding() is True
+    assert restarted.restart_onboarding() is True
+    assert restarted.offer_onboarding() is False
+    assert restarted.restart_onboarding() is True
     assert restarted.offer_onboarding() is False
 
 
@@ -88,6 +89,45 @@ def test_preferences_http_api_uses_core_service() -> None:
         ).json()
         assert updated["proactive_cadence"] == "rare"
         assert updated["correction_style"] == "normal"
+
+
+def test_completed_preferences_http_restart_reopens_without_changing_policy() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    service = PreferencesService(PreferencesRepository(Session(engine)))
+    service.update(
+        PreferencesUpdate(
+            correction_style=CorrectionStyle.INTENSIVE,
+            proactive_cadence=ProactiveCadence.NORMAL,
+        )
+    )
+    app = create_app()
+    app.dependency_overrides[get_preferences_service] = lambda: service
+
+    with TestClient(app) as client:
+        response = client.post("/v1/preferences/onboarding/restart")
+
+    assert response.status_code == 200
+    assert response.json() == {"should_offer": True}
+    assert service.has_completed_preferences() is True
+    assert service.read().correction_style == CorrectionStyle.INTENSIVE
+    settings = Settings(
+        proactive_review_idle_seconds=1,
+        proactive_conversation_idle_seconds=2,
+        proactive_daily_limit=20,
+        proactive_accept_cooldown_minutes=4,
+    )
+    proactive = ProactiveService(
+        repository=ProactiveRepository(Session(engine)),
+        availability=AvailabilityService(
+            repository=AvailabilityRepository(Session(engine))
+        ),
+        learning=LearningService(repository=LearningRepository(Session(engine))),
+        settings=settings,
+        preferences=service,
+    )
+    assert proactive._policy(service.read()) == (600, 1800, 3, 60)
+    assert service.offer_onboarding() is False
 
 
 def test_timezone_windows_and_cadence_suppress_without_weakening_availability() -> None:

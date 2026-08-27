@@ -68,7 +68,7 @@ class PreferencesService:
         self._repository.save(row)
         return True
 
-    def restart_onboarding(self) -> None:
+    def restart_onboarding(self) -> bool:
         """Allow an explicit UI command to show onboarding again.
 
         A completed profile stays completed so reopening the UI cannot silently
@@ -76,13 +76,17 @@ class PreferencesService:
         """
         row = self._repository.get(self._user_id)
         if row is not None and row.onboarding_state == "completed":
-            return
+            return True
         now = datetime.now(UTC).isoformat()
         if row is None:
             row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)
-        row.onboarding_state = "pending"
+        # The restart endpoint is itself an explicit presentation event. Mark
+        # incomplete profiles offered so the automatic first-run path remains
+        # deduplicated if the UI restarts before a choice is made.
+        row.onboarding_state = "offered"
         row.updated_at = now
         self._repository.save(row)
+        return True
 
     @staticmethod
     def _encode(value: object) -> object:

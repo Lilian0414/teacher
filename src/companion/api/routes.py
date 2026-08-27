@@ -110,8 +110,7 @@ async def offer_preferences_onboarding(
 async def restart_preferences_onboarding(
     service: PreferencesService = PreferencesDependency,
 ) -> OnboardingOfferSchema:
-    service.restart_onboarding()
-    return OnboardingOfferSchema(should_offer=service.offer_onboarding())
+    return OnboardingOfferSchema(should_offer=service.restart_onboarding())
 
 
 @router.post("/v1/proactive/check")
