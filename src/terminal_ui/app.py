@@ -577,6 +577,7 @@ class CompanionTerminal(App[None]):
         self._hide_invitation()
         self._last_activity = time.monotonic()
         if decision != "start":
+            self._messages.write(self._format_invitation_suppression(payload, decision))
             return
         question = payload.get("review_question")
         if isinstance(question, dict):
@@ -627,6 +628,10 @@ class CompanionTerminal(App[None]):
         result = await self._post_command(raw)
         self._messages.write(self._format_command_result(result))
         command = result.get("command")
+        if command in {"busy", "dnd", "available", "status"} and result.get("ok"):
+            status = await self._fetch_proactive_status()
+            if status is not None:
+                self._messages.write(self._format_proactive_status(status))
         if command == "say":
             inserted = result.get("inserted_user_message")
             if (
@@ -793,9 +798,7 @@ class CompanionTerminal(App[None]):
         completion.raise_for_status()
         outcome = completion.json().get("outcome")
         if outcome == "learning_signal_captured":
-            self._messages.write(
-                "Practice complete. A useful learning point was saved for review."
-            )
+            self._messages.write("Practice complete. A useful learning point was saved for review.")
         else:
             self._messages.write("Practice complete. This conversation was not graded.")
         self._pending_practice_completion = None
@@ -822,11 +825,80 @@ class CompanionTerminal(App[None]):
             response = await self._client.get("/v1/state")
             response.raise_for_status()
             payload = cast(dict[str, Any], response.json())
+            proactive = await self._fetch_proactive_status()
+            if proactive is not None:
+                payload["proactive"] = proactive
             self._update_status(payload)
             return payload
         except (httpx.HTTPError, ValueError):
             self._status.update("Core: offline | Availability: unknown | Remaining: -")
             return None
+
+    async def _fetch_proactive_status(self) -> dict[str, Any] | None:
+        try:
+            response = await self._client.post(
+                "/v1/proactive/status",
+                json={
+                    "idle_seconds": max(0.0, time.monotonic() - self._last_activity),
+                    "can_present": self._can_present_invitation(),
+                },
+            )
+            response.raise_for_status()
+            return cast(dict[str, Any], response.json())
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    @staticmethod
+    def _format_proactive_status(status: dict[str, Any]) -> str:
+        cadence = str(status.get("cadence", "normal")).title()
+        due = int(status.get("due_review_count", 0))
+        reason = str(status.get("reason", ""))
+        boundary = status.get("not_before") or status.get("availability_expires_at")
+        when = CompanionTerminal._format_proactive_time(boundary)
+        messages = {
+            "busy": f"Busy until {when} — no practice invitations.",
+            "dnd": "DND — proactive paused until you switch back to Available.",
+            "outside_active_hours": "Outside active hours — proactive paused.",
+            "quiet_hours": "Quiet hours — proactive paused.",
+            "accepted_practice": "Practice is already active — no new invitation.",
+            "pending_invitation": "A practice invitation is waiting for your response.",
+            "snoozed": f"Later — not before {when}.",
+            "dismissed_today": f"No more invitations today — paused until {when}.",
+            "accepted_cooldown": f"Practice cooldown — not before {when}.",
+            "daily_limit": "No more invitations today.",
+            "ui_cannot_present": "Proactive is ready when the current activity finishes.",
+        }
+        if reason == "insufficient_idle":
+            minutes = max(1, round(float(status.get("idle_threshold_seconds", 0)) / 60))
+            detail = f"May invite after about {minutes} minutes of inactivity."
+        elif reason in messages:
+            detail = messages[reason]
+        elif due:
+            detail = f"{due} review{'s' if due != 1 else ''} due — next invite prioritizes review."
+        else:
+            detail = "Available — no reviews due; next invite may be conversation practice."
+        return f"Proactive: {cadence} · {detail}"
+
+    @staticmethod
+    def _format_proactive_time(value: object) -> str:
+        if not isinstance(value, str):
+            return "later"
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(ZoneInfo(get_settings().timezone)).strftime("%H:%M")
+
+    @staticmethod
+    def _format_invitation_suppression(payload: dict[str, Any], decision: str) -> str:
+        invitation = payload.get("invitation")
+        boundary = invitation.get("suppress_until") if isinstance(invitation, dict) else None
+        when = CompanionTerminal._format_proactive_time(boundary)
+        if decision == "snooze":
+            return f"Okay — I won't ask again before {when}."
+        return f"Got it — no more proactive practice invitations today (until {when})."
 
     async def action_quit(self) -> None:
         if self._active_practice_invitation_id is not None:
@@ -884,12 +956,17 @@ class CompanionTerminal(App[None]):
         due_review_count = payload.get("due_review_count")
         if due_review_count is not None:
             self._due_review_count = int(due_review_count)
+        proactive = payload.get("proactive")
+        proactive_text = (
+            f" | {self._format_proactive_status(proactive)}" if isinstance(proactive, dict) else ""
+        )
         self._status.update(
             "Core: online"
             f" | Availability: {availability.upper()}"
             f" | Remaining: {remaining_text}"
             f" | LLM: {llm_text}"
             f" | {self._review_indicator(self._due_review_count)}"
+            f"{proactive_text}"
         )
 
     @staticmethod

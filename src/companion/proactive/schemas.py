@@ -4,6 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from companion.learning.schemas import ReviewQuestion
+from companion.schemas.availability import AvailabilityState
 
 
 class InvitationKind(StrEnum):
@@ -36,6 +37,42 @@ class InvitationDecision(StrEnum):
 class ProactiveCheckRequest(BaseModel):
     idle_seconds: float = Field(ge=0)
     can_present: bool
+
+
+class ProactiveReason(StrEnum):
+    ELIGIBLE = "eligible"
+    UI_CANNOT_PRESENT = "ui_cannot_present"
+    BUSY = "busy"
+    DND = "dnd"
+    OUTSIDE_ACTIVE_HOURS = "outside_active_hours"
+    QUIET_HOURS = "quiet_hours"
+    ACCEPTED_PRACTICE = "accepted_practice"
+    PENDING_INVITATION = "pending_invitation"
+    SNOOZED = "snoozed"
+    DISMISSED_TODAY = "dismissed_today"
+    ACCEPTED_COOLDOWN = "accepted_cooldown"
+    DAILY_LIMIT = "daily_limit"
+    INSUFFICIENT_IDLE = "insufficient_idle"
+
+
+class ProactiveStatus(BaseModel):
+    cadence: str
+    uses_legacy_policy: bool
+    availability: AvailabilityState
+    availability_expires_at: datetime | None = None
+    eligible: bool
+    reason: ProactiveReason
+    due_review_count: int
+    next_kind: InvitationKind
+    idle_threshold_seconds: int
+    idle_remaining_seconds: float
+    not_before: datetime | None = None
+    daily_delivery_count: int
+    daily_delivery_limit: int
+    active_hours_start: str | None = None
+    active_hours_end: str | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
 
 
 class InvitationSchema(BaseModel):

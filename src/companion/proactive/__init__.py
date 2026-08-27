@@ -11,8 +11,10 @@ from companion.proactive.schemas import (
     PracticeOutcome,
     ProactiveCheckRequest,
     ProactiveCheckResponse,
+    ProactiveReason,
     ProactiveRespondRequest,
     ProactiveRespondResponse,
+    ProactiveStatus,
 )
 from companion.proactive.service import ProactiveService
 
@@ -30,5 +32,7 @@ __all__ = [
     "PracticeOutcome",
     "ProactiveRespondRequest",
     "ProactiveRespondResponse",
+    "ProactiveReason",
+    "ProactiveStatus",
     "ProactiveService",
 ]

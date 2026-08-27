@@ -13,6 +13,7 @@ from companion.proactive import (
     InvitationDecision,
     InvitationKind,
     ProactiveCheckRequest,
+    ProactiveReason,
     ProactiveRepository,
     ProactiveService,
 )
@@ -76,6 +77,52 @@ def test_check_suppression_pending_stability_and_atomic_decision() -> None:
     now[0] += timedelta(minutes=31)
     availability.set_override(OverrideRequest(AvailabilityState.BUSY, timedelta(hours=1)))
     assert service.check(ProactiveCheckRequest(idle_seconds=999, can_present=True)) is None
+
+
+def test_status_explains_eligibility_without_delivering() -> None:
+    service, repository, _, availability = make_service()
+    request = ProactiveCheckRequest(idle_seconds=0, can_present=True)
+
+    waiting = service.status(request)
+    assert waiting.reason == ProactiveReason.INSUFFICIENT_IDLE
+    assert waiting.idle_threshold_seconds == 20
+    assert waiting.idle_remaining_seconds == 20
+    assert waiting.next_kind == InvitationKind.CONVERSATION
+    assert waiting.uses_legacy_policy is True
+    assert repository.delivery_count("default", datetime(2026, 8, 21).date()) == 0
+
+    assert service.status(request.model_copy(update={"can_present": False})).reason == (
+        ProactiveReason.UI_CANNOT_PRESENT
+    )
+    availability.set_override(OverrideRequest(AvailabilityState.BUSY, timedelta(hours=1)))
+    busy = service.status(request)
+    assert busy.reason == ProactiveReason.BUSY
+    assert busy.not_before == busy.availability_expires_at
+    assert busy.availability_expires_at is not None
+    availability.set_override(OverrideRequest(AvailabilityState.DND, None))
+    assert service.status(request).reason == ProactiveReason.DND
+
+
+def test_status_preserves_pending_snooze_and_daily_limit_order() -> None:
+    service, _, now, _ = make_service()
+    request = ProactiveCheckRequest(idle_seconds=999, can_present=True)
+    assert service.status(request).reason == ProactiveReason.ELIGIBLE
+    invitation = service.check(request)
+    assert invitation is not None
+    assert service.status(request).reason == ProactiveReason.PENDING_INVITATION
+    service.respond(invitation.id, InvitationDecision.SNOOZE)
+    snoozed = service.status(request)
+    assert snoozed.reason == ProactiveReason.SNOOZED
+    assert snoozed.not_before == now[0] + timedelta(minutes=30)
+
+    now[0] += timedelta(minutes=31)
+    second = service.check(request)
+    assert second is not None
+    service.respond(second.id, InvitationDecision.SNOOZE)
+    now[0] += timedelta(minutes=31)
+    limited = service.status(request)
+    assert limited.reason == ProactiveReason.DAILY_LIMIT
+    assert (limited.daily_delivery_count, limited.daily_delivery_limit) == (2, 2)
 
 
 def test_dismissal_and_daily_limit_use_local_date() -> None:
