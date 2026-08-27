@@ -22,20 +22,24 @@ Edit `.env` locally. Confirm `COMPANION_TIMEZONE=Asia/Taipei`, `LLM_PROVIDER=gro
 `EMBEDDING_MODEL=nomic-embed-text`, and `EMBEDDING_DIMENSIONS=768`. Put the real Groq key only in
 `.env`; do not copy it into logs or this checklist.
 
-Use a new UAT database and migrate it from empty:
+Use the canonical UAT database. Creating or resetting it is an explicit operator action; the
+launcher never deletes it. Migrate it, then use the guarded launcher, which pins the absolute DB
+path, `user_id=uat`, and `Asia/Taipei` even if the shell or `.env` contains stale overrides. It
+prints those values, the Core URL, and Alembic current/head, and refuses to launch unless the path
+is canonical and the database is at head:
 
 ```bash
 export COMPANION_DATABASE_URL="sqlite:////Users/$USER/Library/Application Support/ai-learning-companion/final-uat.sqlite3"
-rm -f "/Users/$USER/Library/Application Support/ai-learning-companion/final-uat.sqlite3"
 alembic upgrade head
 ollama serve                         # separate terminal
 ollama pull nomic-embed-text         # once, before the run
 ollama list
-companion                            # start Core and UI
+companion-uat                        # guarded final-UAT Core and UI
 ```
 
 In a separate activated shell with the same `.env` and database setting, capture the read-only,
-allow-listed snapshot. It reports credential presence only as `present (redacted)` and performs
+allow-listed snapshot. It includes the resolved user, timezone, Core URL, database path, and
+Alembic current/head. It reports credential presence only as `present (redacted)` and performs
 only Core GET requests and read-only database inspection:
 
 ```bash

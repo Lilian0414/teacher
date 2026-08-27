@@ -42,10 +42,17 @@ def _alembic_head() -> str:
     return ",".join(heads) if heads else "none"
 
 
+def migration_snapshot(path: Path | None) -> dict[str, str]:
+    """Return the current and expected revisions without modifying the database."""
+    return {"head": _alembic_head(), "current": _database_revision(path)}
+
+
 def configuration_snapshot(settings: Settings) -> dict[str, object]:
     """Return allow-listed settings only; credential values are never included."""
     return {
+        "user_id": settings.user_id,
         "timezone": settings.timezone,
+        "core_url": settings.core_url,
         "llm_provider": settings.llm_provider,
         "groq_model": settings.groq_model,
         "groq_api_key": "present (redacted)" if settings.groq_api_key else "not set",
@@ -72,10 +79,7 @@ def evidence_snapshot(settings: Settings) -> dict[str, object]:
     return {
         "commit": _git_commit(),
         "configuration": configuration_snapshot(settings),
-        "alembic": {
-            "head": _alembic_head(),
-            "current": _database_revision(settings.sqlite_path),
-        },
+        "alembic": migration_snapshot(settings.sqlite_path),
         "core": {
             "health": _get_json(f"{settings.core_url}/health"),
             "state": _get_json(f"{settings.core_url}/v1/state"),

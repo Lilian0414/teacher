@@ -38,6 +38,31 @@ def test_default_groq_model_is_supported_replacement() -> None:
     assert Settings().groq_model == "openai/gpt-oss-20b"
 
 
+def test_explicit_dotenv_opt_in_still_works(tmp_path: Path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("COMPANION_USER_ID=explicit-user\n", encoding="utf-8")
+
+    assert Settings(_env_file=dotenv).user_id == "explicit-user"  # type: ignore[call-arg]
+
+
+def test_pytest_ignores_hostile_repository_dotenv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text(
+        "COMPANION_USER_ID=hostile\n"
+        "COMPANION_TIMEZONE=UTC\n"
+        "COMPANION_DATABASE_URL=sqlite:////tmp/hostile.sqlite3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings()
+
+    assert settings.user_id == "default"
+    assert settings.timezone == "Asia/Taipei"
+    assert settings.sqlite_path != Path("/tmp/hostile.sqlite3")
+
+
 def test_proactive_poll_interval_defaults_to_30_seconds() -> None:
     assert Settings(_env_file=None).proactive_poll_interval_seconds == 30  # type: ignore[call-arg]
 
