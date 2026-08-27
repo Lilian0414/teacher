@@ -13,33 +13,39 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 > source of truth; don't `bd import` during normal operation; don't
 > reach for third-party Dolt hosting before trying the default).
 
-## Codex implementation delivery contract
+## Codex implementation handoff contract
 
 For GitHub Issues explicitly delegated to Codex:
 
 - Treat the linked GitHub Issue/spec as the task-specific source of truth.
-- Start from the latest requested base branch, normally `main`, and keep changes focused to the delegated Issue.
-- Read this file and repository-local skills/instructions before editing.
+- Start from the latest requested base branch/SHA, normally `main`, and keep changes focused to the delegated Issue.
+- Read this file and repository-local skills/instructions before editing, including `.agents/skills/implementation-handoff/SKILL.md` when applicable.
+- Reconstruct relevant current behavior from code/tests/runtime evidence before editing; do not implement from README or naming assumptions alone.
 - Run the strongest applicable repository checks requested by the Issue (normally Ruff, strict mypy, pytest, migrations/packaging checks when relevant, and `git diff --check`).
 - Do not broaden scope or rewrite unrelated code.
-- Do not merge the implementation PR.
-- The **GitHub PR is the delivery boundary**. A task summary or task-local commit alone is not delivery.
-- Task/session visibility is not required as a separate workflow gate. If triggered asynchronously, continue the delegated work normally and publish/update the implementation result when possible.
-- If the environment exposes **Create PR**, leaving the completed implementation ready for that handoff is acceptable; a human may perform that publication click.
-- If publication is blocked, preserve the completed implementation and report the exact blocker. Do not redo the feature merely because push/PR creation failed.
-- When review findings are sent back, update the same implementation/PR where practical, run affected checks again, and do not merge.
+- Prefer one active implementation writer per coherent Issue; reuse valid existing work instead of starting a duplicate implementation run.
+- Complete the lifecycle `inspect → implement → verify → commit → report → STOP`.
+- Report commit SHA, branch/task ref when available, changed files/behavior, checks actually run, and any unverified layer.
+- **Do not create a pull request.**
+- **Do not attempt PR publication or publication recovery.**
+- **Do not merge.**
+- A missing PR is not an implementation failure and is not a reason to redo valid implementation.
+- The user creates the PR manually after handoff; ChatGPT/reviewer handles GitHub-visible diff review, current-head CI/UAT judgment, and merge decisions afterward.
+- When review findings require code changes, update the same implementation/branch where practical, rerun affected checks, commit, and hand off again.
 - If equivalent work has already merged and this is a delayed duplicate task, stop rather than resolving duplicate-work conflicts or reimplementing it.
 
 Implementation ownership remains with Codex for delegated Issues unless the user explicitly changes ownership. ChatGPT/planner-side review or publication delays are not permission for a second implementation writer to take over silently.
+
+Always distinguish `implementation complete`, `PR available`, `current-head CI green`, `UAT passed`, and `merged`.
 
 ## Quick Reference
 
 ```bash
 bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+bd show <id>           # View issue details
+bd update <id> --claim # Claim work atomically
+bd close <id>          # Complete work
+bd dolt push           # Push beads data to remote
 ```
 
 ## Non-Interactive Shell Commands
@@ -75,16 +81,16 @@ This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full 
 
 ```bash
 bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+bd show <id>           # View issue details
+bd update <id> --claim # Claim work
+bd close <id>          # Complete work
 ```
 
 ### Rules
 
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `bd remember` for persistent knowledge — do NOT create MEMORY.md files
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
@@ -131,10 +137,10 @@ Use Beads (`bd`) for durable task tracking in repositories that include it. Use 
 
 ```bash
 bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
+bd show <id>             # View issue details
+bd update <id> --claim   # Claim work
+bd close <id>            # Complete work
+bd prime                 # Refresh Beads context
 ```
 
 ### Rules
