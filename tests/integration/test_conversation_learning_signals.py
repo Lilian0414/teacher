@@ -318,3 +318,107 @@ async def test_unoffered_source_identifier_is_rejected_without_mutation() -> Non
         assert result.assistant_message is not None
         assert repository.occurrences() == []
         assert repository.due_count(user_id="default", now=datetime.max.replace(tzinfo=UTC)) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("review_prompt", "answers"),
+    [
+        ('What is the correct spelling of "perents"?', [" parents ", "PARENTS!", "parents"]),
+        ('What is the correct past tense of "go"?', ["went"]),
+        ('Correct this sentence: "I goed home."', ["I went home."]),
+    ],
+)
+async def test_standalone_signals_persist_normalized_answers_and_keep_identity(
+    review_prompt: str, answers: list[str]
+) -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider_candidate = _candidate()
+        provider_candidate.review_prompt = review_prompt
+        provider_candidate.accepted_answers = answers
+
+        class StandaloneProvider(BoundSignalProvider):
+            async def extract_learning_signal(
+                self, request: LearningSignalRequest
+            ) -> LearningSignalCandidate:
+                self.learning_signal_requests.append(request)
+                return provider_candidate.model_copy(
+                    update={
+                        "source_conversation_id": request.conversation_id,
+                        "source_user_message_id": request.user_message_id,
+                        "source_assistant_message_id": request.assistant_message_id,
+                    }
+                )
+
+        repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=StandaloneProvider(),
+            learning_service=LearningService(repository=repository),
+        )
+        conversation = service.create_conversation()
+
+        first = await service.send_user_message(
+            conversation_id=conversation.id, content="Please help me practice this correction."
+        )
+        second = await service.send_user_message(
+            conversation_id=conversation.id, content="Please help me practice it again."
+        )
+
+        assert first.assistant_message is not None and second.assistant_message is not None
+        occurrences = repository.occurrences()
+        assert len(occurrences) == 2
+        assert occurrences[0].learning_item_id == occurrences[1].learning_item_id
+        item = repository.get_item(occurrences[0].learning_item_id, user_id="default")
+        assert item is not None
+        expected = ["parents"] if "perents" in review_prompt else answers
+        assert repository.answers(item) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "review_prompt",
+    [
+        "Correct the misspelled word in the user's sentence.",
+        "Correct the sentence above.",
+        "What does the phrase above mean?",
+        "Fix this sentence.",
+    ],
+)
+async def test_context_dependent_signal_creates_no_item_or_occurrence(review_prompt: str) -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        candidate = _candidate()
+        candidate.review_prompt = review_prompt
+
+        class ContextDependentProvider(BoundSignalProvider):
+            async def extract_learning_signal(
+                self, request: LearningSignalRequest
+            ) -> LearningSignalCandidate:
+                return candidate.model_copy(
+                    update={
+                        "source_conversation_id": request.conversation_id,
+                        "source_user_message_id": request.user_message_id,
+                        "source_assistant_message_id": request.assistant_message_id,
+                    }
+                )
+
+        repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=ContextDependentProvider(),
+            learning_service=LearningService(repository=repository),
+        )
+        conversation = service.create_conversation()
+
+        await service.send_user_message(
+            conversation_id=conversation.id, content="Please correct my English sentence."
+        )
+
+        assert repository.occurrences() == []
+        assert repository.due_items(
+            user_id="default", now=datetime.max.replace(tzinfo=UTC)
+        ) == []
