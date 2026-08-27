@@ -73,7 +73,7 @@ async def test_shrug_reuses_hint_without_answer_request_or_state_change() -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
-        assert b"/hint prompt" in request.content
+        assert request.content == b""
         return httpx.Response(200, json={"command": "hint", "ok": True, "hints": ["First word"]})
 
     terminal = CompanionTerminal(gesture_adapter=FakeGestureAdapter())
@@ -86,7 +86,7 @@ async def test_shrug_reuses_hint_without_answer_request_or_state_change() -> Non
 
     await terminal.handle_gesture(GestureIntent.UNCERTAINTY)
 
-    assert paths == ["/v1/commands/execute"]
+    assert paths == ["/v1/review/item-1/hint"]
     assert terminal._mode == InteractionMode.REVIEW
     assert terminal._active_review_item_id == "item-1"
     await terminal._client.aclose()

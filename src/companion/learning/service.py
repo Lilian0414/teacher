@@ -118,6 +118,13 @@ class LearningService:
         items = self._repository.due_items(user_id=self._user_id, now=self._clock(), limit=1)
         return self._question(items[0], total=self.due_count()) if items else None
 
+    def review_prompt(self, item_id: str) -> str:
+        """Return an item's prompt without changing its review state."""
+        item = self._repository.get_item(item_id, user_id=self._user_id)
+        if item is None:
+            raise LearningItemNotFoundError(item_id)
+        return item.prompt
+
     def due_count(self) -> int:
         return self._repository.due_count(user_id=self._user_id, now=self._clock())
 

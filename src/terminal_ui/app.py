@@ -268,14 +268,16 @@ class CompanionTerminal(App[None]):
 
     async def handle_gesture(self, intent: GestureIntent) -> None:
         if intent == GestureIntent.UNCERTAINTY and self._mode == InteractionMode.REVIEW:
-            prompt = self._active_review_prompt
-            if prompt is not None:
-                await self._run_guarded(lambda: self._show_review_hint(prompt))
+            item_id = self._active_review_item_id
+            if item_id is not None:
+                await self._run_guarded(lambda: self._show_review_hint(item_id))
         elif intent == GestureIntent.THUMBS_UP and self._mode == InteractionMode.REVIEW_COMPLETE:
             await self.action_finish_review()
 
-    async def _show_review_hint(self, prompt: str) -> None:
-        result = await self._post_command(f"/hint {prompt}")
+    async def _show_review_hint(self, item_id: str) -> None:
+        response = await self._client.post(f"/v1/review/{item_id}/hint")
+        response.raise_for_status()
+        result = cast(dict[str, Any], response.json())
         self._messages.write(self._format_command_result(result))
 
     async def action_finish_review(self) -> None:
