@@ -44,6 +44,10 @@ class Settings(BaseSettings):
         default="https://api.groq.com/openai/v1",
         validation_alias=AliasChoices("GROQ_BASE_URL", "COMPANION_GROQ_BASE_URL"),
     )
+    groq_stt_model: str = Field(
+        default="whisper-large-v3-turbo",
+        validation_alias=AliasChoices("GROQ_STT_MODEL", "COMPANION_GROQ_STT_MODEL"),
+    )
     llm_timeout_seconds: float = Field(
         default=30,
         gt=0,

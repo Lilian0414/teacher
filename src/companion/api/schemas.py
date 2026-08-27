@@ -73,3 +73,7 @@ class ReviewStateResponse(BaseModel):
 
 class ReviewSubmissionResponse(BaseModel):
     result: ReviewResult
+
+
+class TranscriptionResponse(BaseModel):
+    transcript: str

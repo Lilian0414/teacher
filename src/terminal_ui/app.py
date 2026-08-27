@@ -13,6 +13,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
 from companion.settings import get_settings
+from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
 
 class InteractionMode(StrEnum):
@@ -68,11 +69,12 @@ class CompanionTerminal(App[None]):
         ("ctrl+h", "help_intent", "Help me say it"),
         ("ctrl+g", "hint_intent", "Hint"),
         ("ctrl+r", "review_intent", "Review"),
+        ("ctrl+m", "record_answer", "Speak answer"),
         ("ctrl+u", "use_suggestion", "Use this"),
         ("escape", "cancel_intent", "Try myself"),
     ]
 
-    def __init__(self, core_url: str | None = None) -> None:
+    def __init__(self, core_url: str | None = None, recorder: Any | None = None) -> None:
         super().__init__()
         self._core_url = (core_url or get_settings().core_url).rstrip("/")
         self._client = httpx.AsyncClient(
@@ -146,6 +148,7 @@ class CompanionTerminal(App[None]):
         self._pending_assistant_retry: dict[str, str] | None = None
         self._cued_invitation_ids: set[str] = set()
         self._last_activity = time.monotonic()
+        self._recorder = recorder or MacMicrophoneRecorder()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -185,6 +188,8 @@ class CompanionTerminal(App[None]):
                 InteractionMode.NORMAL,
                 InteractionMode.PRACTICE_PROMPT,
             )
+        if action == "record_answer":
+            return self._mode == InteractionMode.REVIEW
         if action in {"help_intent", "hint_intent", "review_intent"}:
             return self._mode == InteractionMode.NORMAL
         if action == "use_suggestion":
@@ -217,6 +222,28 @@ class CompanionTerminal(App[None]):
         if self._waiting or self._mode != InteractionMode.NORMAL:
             return
         await self._run_guarded(self._run_review_intent)
+
+    async def action_record_answer(self) -> None:
+        if self._waiting or self._mode != InteractionMode.REVIEW:
+            return
+        await self._run_guarded(self._record_review_answer)
+
+    async def _record_review_answer(self) -> None:
+        self._messages.write("[system] Recording for 5 seconds…")
+        try:
+            audio = await self._recorder.record()
+            response = await self._client.post(
+                "/v1/speech/transcriptions", content=audio, headers={"Content-Type": "audio/wav"}
+            )
+            response.raise_for_status()
+            transcript = str(response.json().get("transcript", "")).strip()
+            if not transcript:
+                raise ValueError("Transcription was empty; please retry or type your answer.")
+        except MicrophoneUnavailableError as exc:
+            self._messages.write(f"[system] {exc} You can still type your answer.")
+            return
+        self._messages.write(f"> 🎤 {transcript}")
+        await self._submit_review_answer(transcript)
 
     async def action_retry_assistant(self) -> None:
         if self._waiting or self._pending_assistant_retry is None:
@@ -383,7 +410,7 @@ class CompanionTerminal(App[None]):
         ):
             return [None, None, ("Cancel", "cancel_intent")]
         if self._mode == InteractionMode.REVIEW:
-            return [None, None, ("Stop review", "cancel_intent")]
+            return [("Speak answer", "record_answer"), None, ("Stop review", "cancel_intent")]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
                 return [None, None, ("Retry completion", "cancel_intent")]

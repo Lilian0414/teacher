@@ -36,6 +36,7 @@ PyYAML==6.0.3
 rich==15.0.0
 ruff==0.16.4
 setuptools==80.9.0
+sounddevice==0.5.2 ; sys_platform == 'darwin'
 SQLAlchemy==2.0.52
 starlette==1.6.0
 textual==0.89.1

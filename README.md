@@ -109,6 +109,12 @@ Teacher 提供三種不同用途的語言輔助：
 /review quit  離開複習模式
 ```
 
+在 macOS 的複習畫面也可以按 **Speak answer**（或 `Ctrl+M`）錄製五秒回答。
+Teacher 只在記憶體中建立短暫 WAV，交由 Core 使用既有的 `GROQ_API_KEY` 與
+`whisper-large-v3-turbo` 轉錄，顯示 transcript 後再走同一條 review answer path；
+錄音與轉錄失敗時仍可直接打字。第一次使用時請允許終端機存取麥克風；
+若 PortAudio 無法載入，可先執行 `brew install portaudio` 再重新安裝專案。
+
 目前 review 採本機 deterministic grading，不另外呼叫 LLM。
 
 系統會記錄：
