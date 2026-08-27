@@ -73,6 +73,92 @@ async def test_fake_llm_provider_chat_schema() -> None:
     assert response.content
 
 
+@pytest.mark.parametrize(
+    ("style", "policy_text"),
+    [
+        ("light", "Correct only very clear, high-value English mistakes"),
+        ("normal", "gently make one concise, high-value correction"),
+        ("intensive", "Correct clear English mistakes more readily"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_groq_chat_uses_bounded_correction_style_policy(
+    style: str,
+    policy_text: str,
+) -> None:
+    provider = ScriptedGroqProvider(["Let's keep talking."])
+
+    await provider.chat(
+        ChatRequest(
+            messages=[ChatMessage(role="user", content="Yesterday I goed to the market.")],
+            correction_style=style,
+        )
+    )
+
+    prompt = provider.requests[0][0]
+    assert prompt["role"] == "system"
+    assert policy_text in prompt["content"]
+    assert "keep conversation first" in prompt["content"]
+
+
+@pytest.mark.asyncio
+async def test_groq_normal_prompt_encodes_conversational_correction_contract() -> None:
+    provider = ScriptedGroqProvider(["You'd say 'went.' What did you see there?"])
+
+    await provider.chat(
+        ChatRequest(
+            messages=[ChatMessage(role="user", content="Yesterday I goed to the market.")],
+            correction_style="normal",
+        )
+    )
+
+    prompt = provider.requests[0][0]["content"]
+    assert "one concise, high-value correction" in prompt
+    assert "immediately continue the user's topic" in prompt
+    assert "Do not use rigid labels" in prompt
+    assert "English is already natural, do not invent a correction" in prompt
+
+
+@pytest.mark.asyncio
+async def test_groq_chat_keeps_memory_and_learning_context_after_tutor_prompt() -> None:
+    provider = ScriptedGroqProvider(["That sounds fun!"])
+    memory_context = ChatMessage(role="system", content="Relevant memory: likes night markets")
+    learning_context = ChatMessage(role="system", content="Learning context: practice past tense")
+
+    await provider.chat(
+        ChatRequest(
+            messages=[
+                memory_context,
+                learning_context,
+                ChatMessage(role="user", content="I went there yesterday."),
+            ],
+            correction_style="normal",
+        )
+    )
+
+    outbound = provider.requests[0]
+    assert "conversation partner" in outbound[0]["content"]
+    assert outbound[1:] == [
+        memory_context.model_dump(),
+        learning_context.model_dump(),
+        {"role": "user", "content": "I went there yesterday."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_groq_chat_unknown_correction_style_safely_uses_normal_policy() -> None:
+    provider = ScriptedGroqProvider(["Let's continue."])
+
+    await provider.chat(
+        ChatRequest(
+            messages=[ChatMessage(role="user", content="Hello!")],
+            correction_style="legacy-value",
+        )
+    )
+
+    assert "one concise, high-value correction" in provider.requests[0][0]["content"]
+
+
 @pytest.mark.asyncio
 async def test_fake_llm_provider_language_help_schema() -> None:
     provider = FakeLLMProvider()
