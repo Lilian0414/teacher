@@ -28,7 +28,7 @@ from companion.providers.errors import (
     LLMTimeoutError,
 )
 from companion.providers.prompts import (
-    CONVERSATION_SYSTEM_PROMPT,
+    conversation_system_prompt,
     language_help_repair_prompt,
     language_help_system_prompt,
 )
@@ -95,7 +95,10 @@ class GroqLLMProvider:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self._ensure_configured()
         messages = [
-            {"role": "system", "content": CONVERSATION_SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": conversation_system_prompt(request.correction_style),
+            },
             *[message.model_dump() for message in request.messages],
         ]
         content = await self._complete(messages, response_format=None)

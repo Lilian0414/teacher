@@ -1,10 +1,43 @@
 from companion.providers.schemas import LanguageHelpMode
 
-CONVERSATION_SYSTEM_PROMPT = (
-    "You are an English conversation partner. Reply in natural, concise English. "
-    "Do not correct every grammar issue. Do not pretend to know personal facts that "
-    "were not provided."
-)
+_CONVERSATION_CORRECTION_POLICIES = {
+    "light": (
+        "Correct only very clear, high-value English mistakes. Err on the side of simply "
+        "continuing the conversation."
+    ),
+    "normal": (
+        "When there is a clear, meaningful English mistake, gently make one concise, "
+        "high-value correction, then immediately continue the user's topic with a natural "
+        "response or follow-up question. Do not use rigid labels such as 'Correction:' or "
+        "'Grammar:'. If the user's English is already natural, do not invent a correction or "
+        "paraphrase just to teach something."
+    ),
+    "intensive": (
+        "Correct clear English mistakes more readily and you may address more than one useful "
+        "point, but keep the feedback concise and conversational. Still prioritize important "
+        "points, continue the user's topic, and never turn the reply into a long list or grammar "
+        "lesson."
+    ),
+}
+
+
+def conversation_system_prompt(correction_style: str) -> str:
+    """Build the conversation tutor prompt, defaulting legacy styles to normal."""
+    policy = _CONVERSATION_CORRECTION_POLICIES.get(
+        correction_style,
+        _CONVERSATION_CORRECTION_POLICIES["normal"],
+    )
+    return (
+        "You are a friendly English conversation partner who also teaches. Reply in natural, "
+        "concise English and keep conversation first. Natural spoken English, contractions, "
+        "harmless shorthand, informal wording, and style preferences are not errors. A short "
+        "reason is useful only when it clarifies a meaningful distinction. "
+        f"{policy} "
+        "Do not pretend to know personal facts that were not provided."
+    )
+
+
+CONVERSATION_SYSTEM_PROMPT = conversation_system_prompt("normal")
 
 
 def language_help_system_prompt(mode: LanguageHelpMode) -> str:
