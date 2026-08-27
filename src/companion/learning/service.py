@@ -14,6 +14,7 @@ from companion.learning.schemas import (
     ReviewQuestion,
     ReviewResult,
 )
+from companion.learning.signal_policy import validate_learning_signal
 from companion.persistence.models import LearningItem
 from companion.persistence.repositories import decode_dt
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse, contains_cjk
@@ -77,19 +78,16 @@ class LearningService:
             or candidate.source_assistant_message_id != request.assistant_message_id
         ):
             return None
-        prompt = candidate.review_prompt.strip()
-        answers = [answer.strip() for answer in candidate.accepted_answers if answer.strip()]
-        if (
-            not self._is_reviewable(prompt)
-            or not answers
-            or any(not self._is_reviewable(answer) for answer in answers)
-        ):
+        validated = validate_learning_signal(
+            prompt=candidate.review_prompt, accepted_answers=candidate.accepted_answers
+        )
+        if validated is None:
             return None
         occurrence = self._repository.capture_occurrence(
             user_id=self._user_id,
-            prompt=prompt,
+            prompt=validated.prompt,
             kind=candidate.kind,
-            accepted_answers=answers,
+            accepted_answers=validated.accepted_answers,
             conversation_id=request.conversation_id,
             user_message_id=request.user_message_id,
             assistant_message_id=request.assistant_message_id,
