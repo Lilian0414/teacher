@@ -55,7 +55,10 @@ class FakeLLMProvider:
                 notes_zh="前句強調對伴侶不忠；後句強調兩人有不正當關係。",
             )
         if request.mode == LanguageHelpMode.HINT:
-            return LanguageHelpResponse(hints=["exhausted", "worn out", "a long day"])
+            return LanguageHelpResponse(
+                hints=["exhausted", "worn out", "a long day"],
+                accepted_answers=["I was exhausted after a long day."],
+            )
         return LanguageHelpResponse(natural_expression="I had a difficult day at school.")
 
     async def analyze_memory(self, request: MemoryAnalysisRequest) -> MemoryAnalysis:

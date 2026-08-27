@@ -96,20 +96,22 @@ def test_help_and_hint_same_prompt_remain_distinct_through_api() -> None:
         if request.mode == LanguageHelpMode.HELP:
             return LanguageHelpResponse(natural_expression="I am tired today.")
         if request.mode == LanguageHelpMode.HINT:
-            return LanguageHelpResponse(hints=["tired", "exhausted"])
+            return LanguageHelpResponse(
+                hints=["tired", "exhausted"], accepted_answers=["I am tired today."]
+            )
         raise AssertionError(f"Unsupported mode: {request.mode}")
 
     provider.provide_language_help = tired_language_help  # type: ignore[method-assign]
     with client:
-        expression = client.post(
-            "/v1/commands/execute", json={"raw": "/help 我今天很累"}
-        ).json()["learning_item"]
-        phrase = client.post(
-            "/v1/commands/execute", json={"raw": "/hint 我今天很累"}
-        ).json()["learning_item"]
-        repeated = client.post(
-            "/v1/commands/execute", json={"raw": "/hint 我今天很累"}
-        ).json()["learning_item"]
+        expression = client.post("/v1/commands/execute", json={"raw": "/help 我今天很累"}).json()[
+            "learning_item"
+        ]
+        phrase = client.post("/v1/commands/execute", json={"raw": "/hint 我今天很累"}).json()[
+            "learning_item"
+        ]
+        repeated = client.post("/v1/commands/execute", json={"raw": "/hint 我今天很累"}).json()[
+            "learning_item"
+        ]
         graded = client.post(
             f"/v1/review/{expression['id']}/answer", json={"answer": "tired"}
         ).json()["result"]
@@ -117,7 +119,7 @@ def test_help_and_hint_same_prompt_remain_distinct_through_api() -> None:
     assert expression["id"] != phrase["id"]
     assert repeated["id"] == phrase["id"]
     assert expression["accepted_answers"] == ["I am tired today."]
-    assert phrase["accepted_answers"] == ["tired", "exhausted"]
+    assert phrase["accepted_answers"] == ["I am tired today."]
     assert graded["correct"] is False
     assert repository.attempts_for(phrase["id"]) == []
 

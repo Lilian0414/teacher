@@ -55,7 +55,7 @@ def test_repeated_assistance_preserves_existing_review_schedule(mode: LanguageHe
     response = (
         LanguageHelpResponse(natural_expression="I am exhausted.")
         if mode == LanguageHelpMode.HELP
-        else LanguageHelpResponse(hints=["exhausted"])
+        else LanguageHelpResponse(hints=["exhausted"], accepted_answers=["I am exhausted."])
     )
     item = service.capture_assistance(mode=mode, prompt="我很累", response=response)
     assert item is not None
@@ -136,12 +136,14 @@ def test_help_and_hint_have_isolated_answers_and_review_progress() -> None:
     second = service.capture_assistance(
         mode=LanguageHelpMode.HINT,
         prompt=" 我今天很累！ ",
-        response=LanguageHelpResponse(hints=["tired", "exhausted"]),
+        response=LanguageHelpResponse(
+            hints=["tired", "exhausted"], accepted_answers=["I am tired today."]
+        ),
     )
     assert first is not None and second is not None
     assert first.id != second.id
     assert first.accepted_answers == ["I am tired today."]
-    assert second.accepted_answers == ["tired", "exhausted"]
+    assert second.accepted_answers == ["I am tired today."]
     question = service.first_due()
     assert question is not None
     assert (question.position, question.total, question.remaining) == (1, 2, 2)
@@ -198,17 +200,20 @@ def test_review_grading_schedule_and_stale_answer_protection() -> None:
     item = service.capture_assistance(
         mode=LanguageHelpMode.HINT,
         prompt="我想說很累",
-        response=LanguageHelpResponse(hints=["worn out", "exhausted"]),
+        response=LanguageHelpResponse(
+            hints=["worn out", "exhausted"],
+            accepted_answers=["I am worn out."],
+        ),
     )
     assert item is not None
 
-    correct = service.answer(item_id=item.id, answer="  WORN   OUT! ")
+    correct = service.answer(item_id=item.id, answer="  I AM WORN OUT! ")
     assert correct.correct is True
     assert correct.stage == 1
     assert correct.next_review_at == current[0] + timedelta(days=1)
     assert len(repository.attempts_for(item.id)) == 1
     with pytest.raises(LearningItemNotDueError):
-        service.answer(item_id=item.id, answer="worn out")
+        service.answer(item_id=item.id, answer="I am worn out")
     assert len(repository.attempts_for(item.id)) == 1
 
     current[0] += timedelta(days=1)
@@ -218,13 +223,46 @@ def test_review_grading_schedule_and_stale_answer_protection() -> None:
     assert incorrect.next_review_at == current[0] + timedelta(days=1)
 
 
+def test_hint_stores_only_complete_answers_and_grades_uat_sentence() -> None:
+    _, service, _ = make_learning()
+    complete = "I was so tired yesterday that I fell asleep immediately."
+    item = service.capture_assistance(
+        mode=LanguageHelpMode.HINT,
+        prompt="我昨天太累所以直接睡著了",
+        response=LanguageHelpResponse(
+            hints=[
+                "I was so tired yesterday that I ___.",
+                "I fell asleep immediately because ___.",
+            ],
+            accepted_answers=[
+                complete,
+                "I was so tired yesterday that I ___.",
+            ],
+        ),
+    )
+
+    assert item is not None
+    assert item.accepted_answers == [complete]
+    assert service.answer(item_id=item.id, answer=complete).correct is True
+
+    _, unrelated_service, _ = make_learning()
+    unrelated_item = unrelated_service.capture_assistance(
+        mode=LanguageHelpMode.HINT,
+        prompt="我昨天太累所以直接睡著了",
+        response=LanguageHelpResponse(hints=["so tired that ___"], accepted_answers=[complete]),
+    )
+    assert unrelated_item is not None
+    assert (
+        unrelated_service.answer(item_id=unrelated_item.id, answer="I ate an apple.").correct
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     ("accepted", "submitted"),
     [("I am tired.", "I'm tired."), ("I'm tired.", "I am tired.")],
 )
-def test_safe_contraction_variants_advance_and_record_once(
-    accepted: str, submitted: str
-) -> None:
+def test_safe_contraction_variants_advance_and_record_once(accepted: str, submitted: str) -> None:
     repository, service, current = make_learning()
     item = service.capture_assistance(
         mode=LanguageHelpMode.HELP,

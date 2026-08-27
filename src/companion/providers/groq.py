@@ -313,12 +313,14 @@ class GroqLLMProvider:
         if mode == LanguageHelpMode.HINT:
             return bool(
                 response.hints
+                and response.accepted_answers
                 and all(
                     is_english(item)
-                    and not (
-                        FULL_SENTENCE_START.search(item.strip()) and "___" not in item
-                    )
+                    and not (FULL_SENTENCE_START.search(item.strip()) and "___" not in item)
                     for item in response.hints
+                )
+                and all(
+                    is_english(item) and "___" not in item for item in response.accepted_answers
                 )
             )
         return is_english(response.natural_expression)
@@ -341,11 +343,7 @@ class GroqLLMProvider:
         def string_list(value: object) -> list[str]:
             if not isinstance(value, list):
                 return []
-            return [
-                text
-                for item in value
-                if (text := english_string(item)) is not None
-            ]
+            return [text for item in value if (text := english_string(item)) is not None]
 
         if mode == LanguageHelpMode.HELP:
             notes = payload.get("notes_zh")
@@ -376,7 +374,14 @@ class GroqLLMProvider:
             }
 
         if mode == LanguageHelpMode.HINT:
-            return {"hints": GroqLLMProvider._normalize_hint_items(payload.get("hints"))}
+            return {
+                "hints": GroqLLMProvider._normalize_hint_items(payload.get("hints")),
+                "accepted_answers": [
+                    item
+                    for item in string_list(payload.get("accepted_answers"))
+                    if "___" not in item
+                ][:3],
+            }
 
         natural = english_string(payload.get("natural_expression"))
         if natural is None:

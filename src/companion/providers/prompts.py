@@ -50,8 +50,7 @@ def language_help_system_prompt(mode: LanguageHelpMode) -> str:
     )
     if mode == LanguageHelpMode.HELP:
         return (
-            common
-            + ' Schema: {"natural_expression": string|null, "alternatives": string[], '
+            common + ' Schema: {"natural_expression": string|null, "alternatives": string[], '
             '"notes_zh": string, "correction": string|null}. For Chinese or mixed '
             "Chinese-English input, teach the learner how to express the intended content: "
             "remove learner-help wrappers such as 我不會說, 我想說, and 英文怎麼說; return "
@@ -66,12 +65,14 @@ def language_help_system_prompt(mode: LanguageHelpMode) -> str:
         )
     if mode == LanguageHelpMode.HINT:
         return (
-            common
-            + ' Schema: {"hints": string[]}. Provide one to three relevant English words, '
+            common + ' Schema: {"hints": string[], "accepted_answers": string[]}. Provide one to '
+            "three complete, natural English translations in accepted_answers. Also provide "
+            "one to three relevant English words, "
             "phrases, or reusable sentence patterns. Do not provide a complete English "
-            "sentence or translation. A sentence pattern must contain a blank such as ___. "
+            "sentence or translation in hints. A sentence pattern must contain a blank such "
+            "as ___. Never put blanks or other unresolved placeholders in accepted_answers. "
             "Never provide life advice or a Chinese explanation. Return only the hints key, "
-            "with no more than three items and no help or correction fields."
+            "accepted_answers key, and no help or correction fields."
         )
     if mode == LanguageHelpMode.SAY:
         return (
@@ -95,9 +96,12 @@ def language_help_repair_prompt(mode: LanguageHelpMode) -> str:
         )
     if mode == LanguageHelpMode.HINT:
         return (
-            "Correct the previous JSON. Return one to three English words, phrases, or sentence "
-            "patterns only. Do not return a complete sentence or translation; sentence patterns "
-            "must contain ___. Return only the corrected JSON object."
+            "Correct the previous JSON. In hints, return one to three English words, phrases, "
+            "or sentence patterns only; do not put a complete sentence or translation there, "
+            "and sentence patterns must contain ___. Return one to three complete natural "
+            "translations in "
+            "accepted_answers, with no blanks or unresolved placeholders. Return only the "
+            "corrected JSON object."
         )
     if mode == LanguageHelpMode.SAY:
         return (
