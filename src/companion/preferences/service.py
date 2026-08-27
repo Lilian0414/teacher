@@ -24,6 +24,11 @@ class PreferencesService:
         """Expose the persisted policy to conversation prompt builders."""
         return self.read().correction_style.value
 
+    def has_completed_preferences(self) -> bool:
+        """Return whether the learner has established a preference policy."""
+        row = self._repository.get(self._user_id)
+        return row is not None and row.onboarding_state == "completed"
+
     def update(self, update: PreferencesUpdate) -> LearnerPreferencesSchema:
         row = self._repository.get(self._user_id)
         now = datetime.now(UTC).isoformat()
@@ -64,8 +69,14 @@ class PreferencesService:
         return True
 
     def restart_onboarding(self) -> None:
-        """Allow an explicit UI command to show onboarding again."""
+        """Allow an explicit UI command to show onboarding again.
+
+        A completed profile stays completed so reopening the UI cannot silently
+        replace the learner-owned policy with the legacy deployment policy.
+        """
         row = self._repository.get(self._user_id)
+        if row is not None and row.onboarding_state == "completed":
+            return
         now = datetime.now(UTC).isoformat()
         if row is None:
             row = LearnerPreferences(user_id=self._user_id, created_at=now, updated_at=now)

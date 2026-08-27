@@ -248,6 +248,13 @@ class ProactiveService:
         return self._preferences.read() if self._preferences else LearnerPreferencesSchema()
 
     def _policy(self, profile: LearnerPreferencesSchema) -> tuple[int, int, int, int]:
+        if self._preferences is None or not self._preferences.has_completed_preferences():
+            return (
+                self._settings.proactive_review_idle_seconds,
+                self._settings.proactive_conversation_idle_seconds,
+                self._settings.proactive_daily_limit,
+                self._settings.proactive_accept_cooldown_minutes,
+            )
         if profile.proactive_cadence == ProactiveCadence.RARE:
             return (1200, 3600, 1, 120)
         if profile.proactive_cadence == ProactiveCadence.FREQUENT:

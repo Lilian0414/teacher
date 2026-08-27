@@ -152,3 +152,37 @@ def test_normal_cadence_policy_ignores_runtime_proactive_overrides() -> None:
     )
 
     assert service._policy(preferences.read()) == (600, 1800, 3, 60)
+
+
+def test_legacy_policy_applies_until_preferences_are_completed() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    preferences = PreferencesService(PreferencesRepository(session))
+    settings = Settings(
+        proactive_review_idle_seconds=11,
+        proactive_conversation_idle_seconds=22,
+        proactive_daily_limit=7,
+        proactive_accept_cooldown_minutes=44,
+    )
+    service = ProactiveService(
+        repository=ProactiveRepository(session),
+        availability=AvailabilityService(repository=AvailabilityRepository(session)),
+        learning=LearningService(repository=LearningRepository(session)),
+        settings=settings,
+        preferences=preferences,
+    )
+
+    # A synthesized default and merely displaying onboarding both retain the
+    # pre-preferences Settings policy.
+    assert service._policy(preferences.read()) == (11, 22, 7, 44)
+    assert preferences.offer_onboarding() is True
+    assert service._policy(preferences.read()) == (11, 22, 7, 44)
+
+    preferences.update(PreferencesUpdate(proactive_cadence=ProactiveCadence.NORMAL))
+    assert service._policy(preferences.read()) == (600, 1800, 3, 60)
+
+    # Explicitly reopening onboarding must not discard established choices.
+    preferences.restart_onboarding()
+    assert preferences.has_completed_preferences() is True
+    assert service._policy(preferences.read()) == (600, 1800, 3, 60)
