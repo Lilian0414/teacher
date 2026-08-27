@@ -7,6 +7,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
+from rich.markdown import Markdown
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
@@ -143,6 +144,7 @@ class CompanionTerminal(App[None]):
         self._active_practice_invitation_id: str | None = None
         self._pending_practice_completion: dict[str, str] | None = None
         self._pending_assistant_retry: dict[str, str] | None = None
+        self._cued_invitation_ids: set[str] = set()
         self._last_activity = time.monotonic()
 
     def compose(self) -> ComposeResult:
@@ -522,8 +524,7 @@ class CompanionTerminal(App[None]):
             f"active={profile.get('active_hours_start') or '-'}–"
             f"{profile.get('active_hours_end') or '-'}, quiet="
             f"{profile.get('quiet_hours_start') or '-'}–{profile.get('quiet_hours_end') or '-'}, "
-            f"practice={profile['practice_balance']}, sound={profile['sound_enabled']} "
-            "(sound is saved for future audio support)."
+            f"practice={profile['practice_balance']}, sound={profile['sound_enabled']}."
         )
 
     def _can_present_invitation(self) -> bool:
@@ -557,9 +558,29 @@ class CompanionTerminal(App[None]):
                 self._invitation.display = True
                 for button in self._invitation_buttons:
                     button.display = True
+                await self._cue_invitation(invitation)
         except (httpx.HTTPError, ValueError):
             # Polling is best-effort and must never disturb an active workflow.
             return
+
+    async def _cue_invitation(self, invitation: dict[str, Any]) -> None:
+        invitation_id = invitation.get("id")
+        if not isinstance(invitation_id, str) or invitation_id in self._cued_invitation_ids:
+            return
+        self._cued_invitation_ids.add(invitation_id)
+        try:
+            response = await self._client.get("/v1/preferences")
+            response.raise_for_status()
+            preferences = response.json()
+            if isinstance(preferences, dict) and preferences.get("sound_enabled") is True:
+                self.bell()
+        except Exception:
+            # A terminal cue is best-effort and must never hide a presented invitation.
+            return
+
+    def _write_assistant(self, content: str) -> None:
+        """Render assistant Markdown without changing its canonical content."""
+        self._messages.write(Markdown(f"assistant: {content}"))
 
     async def _respond_to_invitation(self, decision: str) -> None:
         invitation = self._pending_invitation
@@ -687,7 +708,7 @@ class CompanionTerminal(App[None]):
         assistant = result.get("assistant_message")
         if not isinstance(assistant, dict):
             raise ValueError("Invalid assistant retry response")
-        self._messages.write(f"assistant: {assistant['content']}")
+        self._write_assistant(str(assistant["content"]))
         self._pending_assistant_retry = None
         self._after_mode_change()
         invitation_id = evidence.get("invitation_id")
@@ -766,7 +787,7 @@ class CompanionTerminal(App[None]):
             self._messages.write(f"You said: {raw}")
         assistant = result.get("assistant_message")
         if assistant is not None:
-            self._messages.write(f"assistant: {assistant['content']}")
+            self._write_assistant(str(assistant["content"]))
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             invitation_id = self._active_practice_invitation_id
             user_message = result.get("user_message")
