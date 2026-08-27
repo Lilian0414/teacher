@@ -13,7 +13,9 @@ may invoke the configured provider. Polling and acceptance never invoke an LLM.
 ## Configuration and demo
 
 Defaults are 10 minutes idle for review, 30 minutes for conversation, 30 minutes for snooze, a
-60-minute post-accept cooldown, and three deliveries per configured local day. For a quick demo:
+60-minute post-accept cooldown, and three deliveries per configured local day. The Textual UI reads
+`COMPANION_PROACTIVE_POLL_INTERVAL_SECONDS` for its proactive invitation polling cadence; the
+minimum valid value is 5 seconds. For a quick demo:
 
 ```bash
 COMPANION_PROACTIVE_REVIEW_IDLE_SECONDS=5 \
