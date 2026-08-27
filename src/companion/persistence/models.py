@@ -180,3 +180,19 @@ class ProactiveInvitation(Base):
     )
     outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
     completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class LearnerPreferences(Base):
+    __tablename__ = "learner_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    correction_style: Mapped[str] = mapped_column(String(16), default="normal")
+    proactive_cadence: Mapped[str] = mapped_column(String(16), default="normal")
+    active_hours_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    active_hours_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    quiet_hours_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    quiet_hours_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    practice_balance: Mapped[str] = mapped_column(String(24), default="balanced")
+    sound_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[str] = mapped_column(String(40))

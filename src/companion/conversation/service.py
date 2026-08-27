@@ -60,6 +60,7 @@ class ConversationService:
         learning_context_builder: LearningContextBuilder | None = None,
         learning_service: LearningService | None = None,
         practice_reconciler: Callable[[], object] | None = None,
+        correction_style: Callable[[], str] | None = None,
     ) -> None:
         self._repository = repository
         self._llm_provider = llm_provider
@@ -70,6 +71,7 @@ class ConversationService:
         self._learning_context_builder = learning_context_builder
         self._learning_service = learning_service
         self._practice_reconciler = practice_reconciler
+        self._correction_style = correction_style or (lambda: "normal")
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -242,7 +244,9 @@ class ConversationService:
                 contexts.append(learning_context)
         if contexts:
             messages.insert(0, ChatMessage(role="system", content="\n\n".join(contexts)))
-        response = await self._llm_provider.chat(ChatRequest(messages=messages))
+        response = await self._llm_provider.chat(
+            ChatRequest(messages=messages, correction_style=self._correction_style())
+        )
         return response.content
 
     def _require_conversation(self, conversation_id: str) -> Conversation:

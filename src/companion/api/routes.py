@@ -33,6 +33,7 @@ from companion.memory import (
     MemoryService,
     MemoryValidationError,
 )
+from companion.preferences import LearnerPreferencesSchema, PreferencesService, PreferencesUpdate
 from companion.proactive import (
     InvitationConflictError,
     InvitationNotFoundError,
@@ -57,6 +58,7 @@ from .dependencies import (
     get_llm_provider,
     get_llm_status,
     get_memory_service,
+    get_preferences_service,
     get_proactive_service,
 )
 
@@ -67,6 +69,29 @@ LLMDependency = Depends(get_llm_provider)
 MemoryDependency = Depends(get_memory_service)
 LearningDependency = Depends(get_learning_service)
 ProactiveDependency = Depends(get_proactive_service)
+PreferencesDependency = Depends(get_preferences_service)
+
+
+@router.get("/v1/preferences")
+async def read_preferences(
+    service: PreferencesService = PreferencesDependency,
+) -> LearnerPreferencesSchema:
+    return service.read()
+
+
+@router.patch("/v1/preferences")
+async def update_preferences(
+    request: PreferencesUpdate,
+    service: PreferencesService = PreferencesDependency,
+) -> LearnerPreferencesSchema:
+    return service.update(request)
+
+
+@router.post("/v1/preferences/reset")
+async def reset_preferences(
+    service: PreferencesService = PreferencesDependency,
+) -> LearnerPreferencesSchema:
+    return service.reset()
 
 
 @router.post("/v1/proactive/check")

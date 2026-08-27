@@ -14,6 +14,7 @@ from companion.memory.repository import MemoryRepository
 from companion.memory.service import MemoryService
 from companion.persistence.database import get_session
 from companion.persistence.repositories import AvailabilityRepository
+from companion.preferences import PreferencesRepository, PreferencesService
 from companion.proactive import ProactiveRepository, ProactiveService
 from companion.providers.embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from companion.providers.errors import LLMConfigurationError
@@ -113,7 +114,9 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
             availability=build_availability_service(session),
             learning=learning_service,
             settings=settings,
+            preferences=PreferencesService(PreferencesRepository(session), settings.user_id),
         )
+        preferences_service = PreferencesService(PreferencesRepository(session), settings.user_id)
         yield ConversationService(
             repository=ConversationRepository(session),
             llm_provider=provider,
@@ -131,6 +134,7 @@ def get_conversation_service() -> Generator[ConversationService, None, None]:
             ),
             learning_service=learning_service,
             practice_reconciler=proactive_service.reconcile_accepted_practices,
+            correction_style=preferences_service.correction_style,
         )
 
 
@@ -166,4 +170,11 @@ def get_proactive_service() -> Generator[ProactiveService, None, None]:
                 user_id=settings.user_id,
             ),
             settings=settings,
+            preferences=PreferencesService(PreferencesRepository(session), settings.user_id),
         )
+
+
+def get_preferences_service() -> Generator[PreferencesService, None, None]:
+    for session in get_session():
+        settings = get_settings()
+        yield PreferencesService(PreferencesRepository(session), settings.user_id)

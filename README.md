@@ -176,3 +176,16 @@ python -m pip install --no-deps --no-build-isolation -e .
 ```
 
 Commit `pyproject.toml` and `requirements.lock` together after the complete validation suite passes.
+
+## Learner preferences
+
+Deployment details (provider endpoints, API keys, database location, embedding model, and
+timezone) remain environment-backed `Settings`. Learner behavior is stored separately in the
+Core database and is read or changed through the Core API. Existing databases with no profile
+receive the current defaults without being blocked.
+
+On first UI run, `/preferences defaults` or `/preferences skip` persists the documented defaults.
+Use `/preferences` later to inspect the profile, `/preferences set NAME VALUE` to change one value,
+or `/preferences reset` to restore defaults. Correction style, proactive cadence, optional active
+and quiet hours, practice balance, and the future proactive-sound preference are persisted. Sound
+is intentionally not played yet; audio remains outside this issue.

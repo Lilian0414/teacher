@@ -6,6 +6,7 @@ from companion.clock import Clock, system_clock
 from companion.learning import LearningService
 from companion.persistence.models import ProactiveInvitation
 from companion.persistence.repositories import decode_dt
+from companion.preferences import LearnerPreferencesSchema, PreferencesService, ProactiveCadence
 from companion.proactive.errors import InvitationConflictError, InvitationNotFoundError
 from companion.proactive.repository import ProactiveRepository
 from companion.proactive.schemas import (
@@ -37,18 +38,22 @@ class ProactiveService:
         learning: LearningService,
         settings: Settings,
         clock: Clock = system_clock,
+        preferences: PreferencesService | None = None,
     ) -> None:
         self._repository = repository
         self._availability = availability
         self._learning = learning
         self._settings = settings
         self._clock = clock
+        self._preferences = preferences
 
     def check(self, request: ProactiveCheckRequest) -> InvitationSchema | None:
         now = self._now()
+        preferences = self._preference_profile()
         if (
             not request.can_present
             or self._availability.snapshot().state != AvailabilityState.AVAILABLE
+            or not self._within_preferred_hours(now, preferences)
         ):
             return None
         if self._repository.accepted_conversation(self._settings.user_id) is not None:
@@ -62,16 +67,13 @@ class ProactiveService:
             return None
         if (
             self._repository.delivery_count(self._settings.user_id, today)
-            >= self._settings.proactive_daily_limit
+            >= self._policy(preferences)[2]
         ):
             return None
         due = self._learning.due_count() > 0
         kind = InvitationKind.REVIEW if due else InvitationKind.CONVERSATION
-        threshold = (
-            self._settings.proactive_review_idle_seconds
-            if due
-            else self._settings.proactive_conversation_idle_seconds
-        )
+        review_idle, conversation_idle, _, _ = self._policy(preferences)
+        threshold = review_idle if due else conversation_idle
         if request.idle_seconds < threshold:
             return None
         key = prompt = None
@@ -109,7 +111,7 @@ class ProactiveService:
         ):
             raise ValueError("conversation_id is required to start conversation practice")
         status = InvitationStatus.ACCEPTED
-        boundary = now + timedelta(minutes=self._settings.proactive_accept_cooldown_minutes)
+        boundary = now + timedelta(minutes=self._policy(self._preference_profile())[3])
         if decision == InvitationDecision.SNOOZE:
             status = InvitationStatus.SNOOZED
             boundary = now + timedelta(minutes=self._settings.proactive_snooze_minutes)
@@ -241,6 +243,37 @@ class ProactiveService:
     def _now(self) -> datetime:
         value = self._clock()
         return value.astimezone(ZoneInfo(self._settings.timezone))
+
+    def _preference_profile(self) -> LearnerPreferencesSchema:
+        return self._preferences.read() if self._preferences else LearnerPreferencesSchema()
+
+    def _policy(self, profile: LearnerPreferencesSchema) -> tuple[int, int, int, int]:
+        if profile.proactive_cadence == ProactiveCadence.RARE:
+            return (1200, 3600, 1, 120)
+        if profile.proactive_cadence == ProactiveCadence.FREQUENT:
+            return (300, 900, 5, 30)
+        return (
+            self._settings.proactive_review_idle_seconds,
+            self._settings.proactive_conversation_idle_seconds,
+            self._settings.proactive_daily_limit,
+            self._settings.proactive_accept_cooldown_minutes,
+        )
+
+    @staticmethod
+    def _within_preferred_hours(now: datetime, profile: LearnerPreferencesSchema) -> bool:
+        def contains(current: time, start: time, end: time) -> bool:
+            return start <= current < end if start < end else current >= start or current < end
+
+        current = now.timetz().replace(tzinfo=None)
+        if profile.active_hours_start and profile.active_hours_end and not contains(
+            current, profile.active_hours_start, profile.active_hours_end
+        ):
+            return False
+        if profile.quiet_hours_start and profile.quiet_hours_end and contains(
+            current, profile.quiet_hours_start, profile.quiet_hours_end
+        ):
+            return False
+        return True
 
     @staticmethod
     def _schema(row: ProactiveInvitation) -> InvitationSchema:

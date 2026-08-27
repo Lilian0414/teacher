@@ -131,6 +131,7 @@ class CompanionTerminal(App[None]):
         self.set_interval(30, self.check_proactive_invitation)
         self._hide_invitation()
         state = await self.refresh_state()
+        await self._show_onboarding_if_needed()
         await self.ensure_conversation()
         self._messages.write(self._startup_message(state))
 
@@ -392,7 +393,9 @@ class CompanionTerminal(App[None]):
         if not raw:
             return
         self._messages.write(f"> {raw}")
-        if self._mode == InteractionMode.AWAITING_HELP_SENTENCE:
+        if raw == "/preferences" or raw.startswith("/preferences "):
+            await self._run_guarded(lambda: self._handle_preferences(raw))
+        elif self._mode == InteractionMode.AWAITING_HELP_SENTENCE:
             await self._run_guarded(lambda: self._run_help_capture(raw))
         elif self._mode == InteractionMode.AWAITING_HINT_SENTENCE:
             await self._run_guarded(lambda: self._run_hint_capture(raw))
@@ -404,6 +407,58 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._submit_review_answer(raw))
         else:
             await self._run_guarded(lambda: self._send_chat_message(raw))
+
+    async def _show_onboarding_if_needed(self) -> None:
+        try:
+            response = await self._client.get("/v1/preferences")
+            response.raise_for_status()
+            if not response.json().get("onboarded"):
+                self._messages.write(
+                    "Welcome! Choose companion preferences, or continue immediately.\n"
+                    "Use `/preferences defaults` (or `/preferences skip`) for defaults.\n"
+                    "Use `/preferences set correction_style light|normal|intensive`,\n"
+                    "`proactive_cadence rare|normal|frequent`, `practice_balance "
+                    "prefer_review|balanced|prefer_conversation`, or `sound_enabled true|false`.\n"
+                    "Optional local-time windows: `/preferences set active_hours 08:00-22:00` "
+                    "or `quiet_hours 22:00-08:00`. Type `/preferences` anytime to inspect them."
+                )
+        except (httpx.HTTPError, ValueError):
+            return
+
+    async def _handle_preferences(self, raw: str) -> None:
+        parts = raw.split()
+        if len(parts) == 1:
+            response = await self._client.get("/v1/preferences")
+        elif parts[1] in {"defaults", "skip", "reset"}:
+            response = await self._client.post("/v1/preferences/reset")
+        elif len(parts) == 4 and parts[1] == "set":
+            key, value = parts[2], parts[3]
+            payload: dict[str, object]
+            if key in {"active_hours", "quiet_hours"}:
+                start, separator, end = value.partition("-")
+                if not separator:
+                    raise ValueError("Hours must use HH:MM-HH:MM")
+                payload = {f"{key}_start": start, f"{key}_end": end}
+            elif key == "sound_enabled":
+                if value.lower() not in {"true", "false", "on", "off"}:
+                    raise ValueError("sound_enabled must be true/false or on/off")
+                payload = {key: value.lower() in {"true", "on"}}
+            else:
+                payload = {key: value}
+            response = await self._client.patch("/v1/preferences", json=payload)
+        else:
+            raise ValueError("Use /preferences [defaults|reset|set NAME VALUE]")
+        response.raise_for_status()
+        profile = cast(dict[str, Any], response.json())
+        self._messages.write(
+            "Preferences: "
+            f"corrections={profile['correction_style']}, cadence={profile['proactive_cadence']}, "
+            f"active={profile.get('active_hours_start') or '-'}–"
+            f"{profile.get('active_hours_end') or '-'}, quiet="
+            f"{profile.get('quiet_hours_start') or '-'}–{profile.get('quiet_hours_end') or '-'}, "
+            f"practice={profile['practice_balance']}, sound={profile['sound_enabled']} "
+            "(sound is saved for future audio support)."
+        )
 
     def _can_present_invitation(self) -> bool:
         return (

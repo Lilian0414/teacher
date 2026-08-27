@@ -10,6 +10,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
+    correction_style: str = "normal"
 
 
 class ChatResponse(BaseModel):
