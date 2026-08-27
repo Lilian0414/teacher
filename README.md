@@ -185,11 +185,15 @@ Core database and is read or changed through the Core API. Existing databases wi
 receive the current defaults without being blocked.
 
 On first UI run, the non-blocking onboarding offer is recorded by Core before it is displayed, so
-continuing directly to conversation will not repeat it after restart. `/preferences defaults` or
-`/preferences skip` persists the documented defaults.
+continuing directly to conversation will not repeat it after restart. The UI offers human-readable
+choices for correction detail and practice reminder frequency, plus **Use defaults** and **Skip**.
 Use `/preferences` later to inspect the profile, `/preferences set NAME VALUE` to change one value,
 or `/preferences reset` to restore defaults. Use `/preferences onboard` to explicitly show the
 onboarding instructions again. PATCH null values are ignored; reset is the supported way to clear
 optional hour windows. Correction style, proactive cadence, optional active
 and quiet hours, practice balance, and the future proactive-sound preference are persisted. Sound
-is intentionally not played yet; audio remains outside this issue.
+is intentionally not played yet; audio remains outside this issue. Cadence policies are fixed per
+learner choice: Rare uses 20/60-minute review/conversation idle thresholds, 1 invitation per day,
+and a 120-minute accepted cooldown; Normal uses 10/30 minutes, 3 per day, and 60 minutes; Frequent
+uses 5/15 minutes, 5 per day, and 30 minutes. Deployment proactive settings do not override these
+persisted cadence choices; the snooze duration remains a separate runtime setting.

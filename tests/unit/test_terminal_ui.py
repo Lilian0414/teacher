@@ -57,7 +57,9 @@ async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> No
 
     await terminal._show_onboarding_if_needed()
     assert len(messages.values) == 1
-    assert "continue immediately" in messages.values[0]
+    assert "keep chatting" in messages.values[0]
+    assert "correction" in messages.values[0]
+    assert "use defaults, or skip" in messages.values[0]
     assert terminal._mode == InteractionMode.NORMAL
 
     terminal._conversation_id = "conversation-1"
@@ -65,8 +67,44 @@ async def test_onboarding_offer_is_non_blocking_and_core_controls_repeat() -> No
     assert "assistant: Hello!" in messages.values
 
     await terminal._show_onboarding_if_needed()
-    assert sum("continue immediately" in message for message in messages.values) == 1
+    assert sum("keep chatting" in message for message in messages.values) == 1
     assert terminal._mode == InteractionMode.NORMAL
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "method", "path", "expected_message"),
+    [
+        ("onboarding-save", "PATCH", "/v1/preferences", "Preferences saved."),
+        ("onboarding-defaults", "POST", "/v1/preferences/reset", "Using default preferences."),
+        ("onboarding-skip", "POST", "/v1/preferences/reset", "Setup skipped."),
+    ],
+)
+async def test_onboarding_choices_defaults_and_skip(
+    action: str, method: str, path: str, expected_message: str
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    terminal = make_terminal()
+    messages = cast(MessageSink, terminal._messages)
+    terminal._onboarding_corrections.value = "intensive"
+    terminal._onboarding_cadence.value = "rare"
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._complete_onboarding(action)
+
+    assert [(request.method, request.url.path) for request in requests] == [(method, path)]
+    if action == "onboarding-save":
+        assert requests[0].content == b'{"correction_style":"intensive","proactive_cadence":"rare"}'
+    assert expected_message in messages.values
     await terminal._client.aclose()
 
 

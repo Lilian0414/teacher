@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, RichLog, Static
+from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
 from companion.settings import get_settings
 
@@ -55,6 +55,9 @@ class CompanionTerminal(App[None]):
         dock: bottom;
     }
     #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
+    #onboarding { height: auto; border: round $success; padding: 0 1; display: none; }
+    #onboarding Select { width: 1fr; margin-right: 1; }
+    #onboarding-actions { height: 3; }
     """
 
     # Exact key choices are flexible (see M3.5 issue): Ctrl+I is avoided
@@ -96,6 +99,36 @@ class CompanionTerminal(App[None]):
             Button("Later", id="invitation-later"),
             Button("Not today", id="invitation-dismiss"),
         ]
+        self._onboarding_corrections = Select(
+            [
+                ("Gentle corrections — only important mistakes", "light"),
+                ("Balanced corrections — helpful, without interrupting too much", "normal"),
+                ("Detailed corrections — point out most mistakes", "intensive"),
+            ],
+            value="normal",
+            id="onboarding-corrections",
+        )
+        self._onboarding_cadence = Select(
+            [
+                ("Rare reminders — give me plenty of space", "rare"),
+                ("Occasional reminders — a balanced pace", "normal"),
+                ("Frequent reminders — keep me practicing", "frequent"),
+            ],
+            value="normal",
+            id="onboarding-cadence",
+        )
+        self._onboarding = Vertical(
+            Static("Welcome! Choose how Teacher should support you (you can change this later)."),
+            self._onboarding_corrections,
+            self._onboarding_cadence,
+            Horizontal(
+                Button("Save choices", id="onboarding-save", variant="success"),
+                Button("Use defaults", id="onboarding-defaults"),
+                Button("Skip", id="onboarding-skip"),
+                id="onboarding-actions",
+            ),
+            id="onboarding",
+        )
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
         self._active_review_item_id: str | None = None
@@ -117,6 +150,7 @@ class CompanionTerminal(App[None]):
         with Vertical():
             yield self._status
             yield self._messages
+            yield self._onboarding
             yield self._invitation
             with Horizontal(id="invitation-actions"):
                 yield from self._invitation_buttons
@@ -211,6 +245,9 @@ class CompanionTerminal(App[None]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._waiting:
+            return
+        if event.button.id in {"onboarding-save", "onboarding-defaults", "onboarding-skip"}:
+            await self._run_guarded(lambda: self._complete_onboarding(event.button.id or ""))
             return
         decisions = {
             "invitation-start": "start",
@@ -419,14 +456,31 @@ class CompanionTerminal(App[None]):
 
     def _write_onboarding(self) -> None:
         self._messages.write(
-            "Welcome! Choose companion preferences, or continue immediately.\n"
-            "Use `/preferences defaults` (or `/preferences skip`) for defaults.\n"
-            "Use `/preferences set correction_style light|normal|intensive`,\n"
-            "`proactive_cadence rare|normal|frequent`, `practice_balance "
-            "prefer_review|balanced|prefer_conversation`, or `sound_enabled true|false`.\n"
-            "Optional local-time windows: `/preferences set active_hours 08:00-22:00` "
-            "or `quiet_hours 22:00-08:00`. Type `/preferences` anytime to inspect them."
+            "Welcome! A few optional choices are ready below. Choose how much correction and "
+            "how often Teacher should invite you to practice, use defaults, or skip. "
+            "You can keep chatting now and change preferences later."
         )
+        self._onboarding.display = True
+
+    async def _complete_onboarding(self, action: str) -> None:
+        if action == "onboarding-save":
+            corrections = self._onboarding_corrections.value
+            cadence = self._onboarding_cadence.value
+            response = await self._client.patch(
+                "/v1/preferences",
+                json={"correction_style": corrections, "proactive_cadence": cadence},
+            )
+            confirmation = "Preferences saved."
+        else:
+            response = await self._client.post("/v1/preferences/reset")
+            confirmation = (
+                "Using default preferences."
+                if action == "onboarding-defaults"
+                else "Setup skipped."
+            )
+        response.raise_for_status()
+        self._onboarding.display = False
+        self._messages.write(confirmation)
 
     async def _handle_preferences(self, raw: str) -> None:
         parts = raw.split()

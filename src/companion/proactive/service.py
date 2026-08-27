@@ -252,12 +252,7 @@ class ProactiveService:
             return (1200, 3600, 1, 120)
         if profile.proactive_cadence == ProactiveCadence.FREQUENT:
             return (300, 900, 5, 30)
-        return (
-            self._settings.proactive_review_idle_seconds,
-            self._settings.proactive_conversation_idle_seconds,
-            self._settings.proactive_daily_limit,
-            self._settings.proactive_accept_cooldown_minutes,
-        )
+        return (600, 1800, 3, 60)
 
     @staticmethod
     def _within_preferred_hours(now: datetime, profile: LearnerPreferencesSchema) -> bool:

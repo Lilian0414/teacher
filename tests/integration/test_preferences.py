@@ -130,3 +130,25 @@ def test_timezone_windows_and_cadence_suppress_without_weakening_availability() 
     )
     now[0] = datetime(2026, 8, 27, 5, 30, tzinfo=UTC)
     assert service.check(ProactiveCheckRequest(idle_seconds=9999, can_present=True)) is None
+
+
+def test_normal_cadence_policy_ignores_runtime_proactive_overrides() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    preferences = PreferencesService(PreferencesRepository(session))
+    preferences.update(PreferencesUpdate(proactive_cadence=ProactiveCadence.NORMAL))
+    service = ProactiveService(
+        repository=ProactiveRepository(session),
+        availability=AvailabilityService(repository=AvailabilityRepository(session)),
+        learning=LearningService(repository=LearningRepository(session)),
+        settings=Settings(
+            proactive_review_idle_seconds=1,
+            proactive_conversation_idle_seconds=2,
+            proactive_daily_limit=20,
+            proactive_accept_cooldown_minutes=4,
+        ),
+        preferences=preferences,
+    )
+
+    assert service._policy(preferences.read()) == (600, 1800, 3, 60)

@@ -61,8 +61,8 @@ def test_settings_and_request_validation() -> None:
 
 def test_check_suppression_pending_stability_and_atomic_decision() -> None:
     service, repository, now, availability = make_service()
-    assert service.check(ProactiveCheckRequest(idle_seconds=19, can_present=True)) is None
-    invitation = service.check(ProactiveCheckRequest(idle_seconds=20, can_present=True))
+    assert service.check(ProactiveCheckRequest(idle_seconds=1799, can_present=True)) is None
+    invitation = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert invitation is not None and invitation.kind == InvitationKind.CONVERSATION
     repeated = service.check(ProactiveCheckRequest(idle_seconds=999, can_present=True))
     assert repeated is not None and repeated.id == invitation.id
@@ -80,16 +80,20 @@ def test_check_suppression_pending_stability_and_atomic_decision() -> None:
 
 def test_dismissal_and_daily_limit_use_local_date() -> None:
     service, _, now, _ = make_service()
-    first = service.check(ProactiveCheckRequest(idle_seconds=20, can_present=True))
+    first = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert first is not None
     service.respond(first.id, InvitationDecision.DISMISS_TODAY)
     now[0] = datetime(2026, 8, 22, 0, tzinfo=UTC)
-    second = service.check(ProactiveCheckRequest(idle_seconds=20, can_present=True))
+    second = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert second is not None and second.starter_key == "week-highlight"
     service.respond(second.id, InvitationDecision.SNOOZE)
     now[0] += timedelta(minutes=31)
-    third = service.check(ProactiveCheckRequest(idle_seconds=20, can_present=True))
+    third = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
     assert third is not None and third.starter_key == "recent-learning"
     service.respond(third.id, InvitationDecision.SNOOZE)
     now[0] += timedelta(minutes=31)
-    assert service.check(ProactiveCheckRequest(idle_seconds=20, can_present=True)) is None
+    fourth = service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True))
+    assert fourth is not None
+    service.respond(fourth.id, InvitationDecision.SNOOZE)
+    now[0] += timedelta(minutes=31)
+    assert service.check(ProactiveCheckRequest(idle_seconds=1800, can_present=True)) is None
