@@ -1066,6 +1066,59 @@ async def test_status_bar_shows_up_to_date_when_no_items_due() -> None:
     await terminal._client.aclose()
 
 
+def test_proactive_summary_uses_core_reason_and_threshold() -> None:
+    assert CompanionTerminal._format_proactive_status(
+        {
+            "cadence": "normal",
+            "reason": "insufficient_idle",
+            "idle_threshold_seconds": 600,
+            "due_review_count": 0,
+        }
+    ) == "Proactive: Normal · May invite after about 10 minutes of inactivity."
+    assert "2 reviews due — next invite prioritizes review" in (
+        CompanionTerminal._format_proactive_status(
+            {"cadence": "frequent", "reason": "eligible", "due_review_count": 2}
+        )
+    )
+
+
+def test_proactive_summary_distinguishes_runtime_policy_and_paused_ui() -> None:
+    legacy = CompanionTerminal._format_proactive_status(
+        {
+            "cadence": "normal",
+            "uses_legacy_policy": True,
+            "reason": "insufficient_idle",
+            "idle_threshold_seconds": 20,
+            "due_review_count": 0,
+        }
+    )
+    assert legacy.startswith("Proactive: Runtime default ·")
+    assert "Proactive: Normal" not in legacy
+
+    completed = CompanionTerminal._format_proactive_status(
+        {
+            "cadence": "frequent",
+            "uses_legacy_policy": False,
+            "reason": "ui_cannot_present",
+            "due_review_count": 0,
+        }
+    )
+    assert completed == (
+        "Proactive: Frequent · Teacher won't interrupt the current activity."
+    )
+    assert "ready" not in completed
+
+
+def test_proactive_action_confirmations_use_core_boundary() -> None:
+    payload = {"invitation": {"suppress_until": "2026-08-21T17:42:00+00:00"}}
+    assert "before 01:42" in CompanionTerminal._format_invitation_suppression(
+        payload, "snooze"
+    )
+    assert "until 01:42" in CompanionTerminal._format_invitation_suppression(
+        payload, "dismiss_today"
+    )
+
+
 @pytest.mark.asyncio
 async def test_help_intent_reuses_existing_help_behavior_and_offers_actions() -> None:
     requests: list[str] = []

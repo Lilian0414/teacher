@@ -16,7 +16,9 @@ from companion.proactive.schemas import (
     InvitationStatus,
     PracticeOutcome,
     ProactiveCheckRequest,
+    ProactiveReason,
     ProactiveRespondResponse,
+    ProactiveStatus,
 )
 from companion.schemas.availability import AvailabilityState
 from companion.settings import Settings
@@ -48,34 +50,15 @@ class ProactiveService:
         self._preferences = preferences
 
     def check(self, request: ProactiveCheckRequest) -> InvitationSchema | None:
+        status = self.status(request)
+        if status.reason == ProactiveReason.PENDING_INVITATION:
+            pending = self._repository.pending(self._settings.user_id)
+            return self._schema(pending) if pending is not None else None
+        if not status.eligible:
+            return None
         now = self._now()
-        preferences = self._preference_profile()
-        if (
-            not request.can_present
-            or self._availability.snapshot().state != AvailabilityState.AVAILABLE
-            or not self._within_preferred_hours(now, preferences)
-        ):
-            return None
-        if self._repository.accepted_conversation(self._settings.user_id) is not None:
-            return None
-        pending = self._repository.pending(self._settings.user_id)
-        if pending is not None:
-            return self._schema(pending)
         today = now.date()
-        latest = self._repository.latest(self._settings.user_id)
-        if latest and latest.suppress_until and decode_dt(latest.suppress_until) > now:
-            return None
-        if (
-            self._repository.delivery_count(self._settings.user_id, today)
-            >= self._policy(preferences)[2]
-        ):
-            return None
-        due = self._learning.due_count() > 0
-        kind = InvitationKind.REVIEW if due else InvitationKind.CONVERSATION
-        review_idle, conversation_idle, _, _ = self._policy(preferences)
-        threshold = review_idle if due else conversation_idle
-        if request.idle_seconds < threshold:
-            return None
+        kind = status.next_kind
         key = prompt = None
         if kind == InvitationKind.CONVERSATION:
             count = self._repository.delivery_count(self._settings.user_id, today, kind)
@@ -90,6 +73,67 @@ class ProactiveService:
                 starter_key=key,
                 starter_prompt=prompt,
             )
+        )
+
+    def status(self, request: ProactiveCheckRequest) -> ProactiveStatus:
+        """Explain the same eligibility path as ``check`` without delivering an invite."""
+        now = self._now()
+        profile = self._preference_profile()
+        review_idle, conversation_idle, daily_limit, _ = self._policy(profile)
+        completed = self._preferences is not None and self._preferences.has_completed_preferences()
+        availability = self._availability.snapshot()
+        due_count = self._learning.due_count()
+        next_kind = InvitationKind.REVIEW if due_count else InvitationKind.CONVERSATION
+        threshold = review_idle if due_count else conversation_idle
+        deliveries = self._repository.delivery_count(self._settings.user_id, now.date())
+        reason = ProactiveReason.ELIGIBLE
+        not_before = None
+        if not request.can_present:
+            reason = ProactiveReason.UI_CANNOT_PRESENT
+        elif availability.state == AvailabilityState.BUSY:
+            reason, not_before = ProactiveReason.BUSY, availability.expires_at
+        elif availability.state == AvailabilityState.DND:
+            reason = ProactiveReason.DND
+        else:
+            hours_reason = self._preferred_hours_reason(now, profile)
+            if hours_reason is not None:
+                reason = hours_reason
+            elif self._repository.accepted_conversation(self._settings.user_id) is not None:
+                reason = ProactiveReason.ACCEPTED_PRACTICE
+            elif self._repository.pending(self._settings.user_id) is not None:
+                reason = ProactiveReason.PENDING_INVITATION
+            else:
+                latest = self._repository.latest(self._settings.user_id)
+                if latest and latest.suppress_until and decode_dt(latest.suppress_until) > now:
+                    not_before = decode_dt(latest.suppress_until)
+                    reason = {
+                        InvitationStatus.SNOOZED.value: ProactiveReason.SNOOZED,
+                        InvitationStatus.DISMISSED.value: ProactiveReason.DISMISSED_TODAY,
+                    }.get(latest.status, ProactiveReason.ACCEPTED_COOLDOWN)
+                elif deliveries >= daily_limit:
+                    reason = ProactiveReason.DAILY_LIMIT
+                elif request.idle_seconds < threshold:
+                    reason = ProactiveReason.INSUFFICIENT_IDLE
+        return ProactiveStatus(
+            cadence=profile.proactive_cadence.value,
+            uses_legacy_policy=not completed,
+            availability=availability.state,
+            availability_expires_at=availability.expires_at,
+            eligible=reason == ProactiveReason.ELIGIBLE,
+            reason=reason,
+            due_review_count=due_count,
+            next_kind=next_kind,
+            idle_threshold_seconds=threshold,
+            idle_remaining_seconds=max(0.0, threshold - request.idle_seconds),
+            not_before=not_before,
+            daily_delivery_count=deliveries,
+            daily_delivery_limit=daily_limit,
+            active_hours_start=str(profile.active_hours_start)
+            if profile.active_hours_start
+            else None,
+            active_hours_end=str(profile.active_hours_end) if profile.active_hours_end else None,
+            quiet_hours_start=str(profile.quiet_hours_start) if profile.quiet_hours_start else None,
+            quiet_hours_end=str(profile.quiet_hours_end) if profile.quiet_hours_end else None,
         )
 
     def respond(
@@ -263,19 +307,29 @@ class ProactiveService:
 
     @staticmethod
     def _within_preferred_hours(now: datetime, profile: LearnerPreferencesSchema) -> bool:
+        return ProactiveService._preferred_hours_reason(now, profile) is None
+
+    @staticmethod
+    def _preferred_hours_reason(
+        now: datetime, profile: LearnerPreferencesSchema
+    ) -> ProactiveReason | None:
         def contains(current: time, start: time, end: time) -> bool:
             return start <= current < end if start < end else current >= start or current < end
 
         current = now.timetz().replace(tzinfo=None)
-        if profile.active_hours_start and profile.active_hours_end and not contains(
-            current, profile.active_hours_start, profile.active_hours_end
+        if (
+            profile.active_hours_start
+            and profile.active_hours_end
+            and not contains(current, profile.active_hours_start, profile.active_hours_end)
         ):
-            return False
-        if profile.quiet_hours_start and profile.quiet_hours_end and contains(
-            current, profile.quiet_hours_start, profile.quiet_hours_end
+            return ProactiveReason.OUTSIDE_ACTIVE_HOURS
+        if (
+            profile.quiet_hours_start
+            and profile.quiet_hours_end
+            and contains(current, profile.quiet_hours_start, profile.quiet_hours_end)
         ):
-            return False
-        return True
+            return ProactiveReason.QUIET_HOURS
+        return None
 
     @staticmethod
     def _schema(row: ProactiveInvitation) -> InvitationSchema:

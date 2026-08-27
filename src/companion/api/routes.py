@@ -49,6 +49,7 @@ from companion.proactive import (
     ProactiveRespondRequest,
     ProactiveRespondResponse,
     ProactiveService,
+    ProactiveStatus,
 )
 from companion.providers.errors import LLMConfigurationError, LLMProviderError
 from companion.providers.protocols import LLMProvider
@@ -119,6 +120,14 @@ async def check_proactive(
     service: ProactiveService = ProactiveDependency,
 ) -> ProactiveCheckResponse:
     return ProactiveCheckResponse(invitation=service.check(request))
+
+
+@router.post("/v1/proactive/status")
+async def proactive_status(
+    request: ProactiveCheckRequest,
+    service: ProactiveService = ProactiveDependency,
+) -> ProactiveStatus:
+    return service.status(request)
 
 
 @router.post("/v1/proactive/invitations/{invitation_id}/respond")
