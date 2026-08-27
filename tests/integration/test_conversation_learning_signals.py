@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
@@ -49,7 +49,7 @@ def _candidate(
 
 
 @pytest.mark.asyncio
-async def test_completed_turn_creates_due_item_with_durable_provenance_and_is_idempotent() -> None:
+async def test_completed_turn_delays_first_review_with_durable_provenance() -> None:
     engine = make_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     now = datetime(2026, 8, 24, 12, tzinfo=UTC)
@@ -78,20 +78,27 @@ async def test_completed_turn_creates_due_item_with_durable_provenance_and_is_id
         assert occurrence.source_user_message_id == result.user_message.id
         assert occurrence.source_assistant_message_id == result.assistant_message.id
         assert occurrence.acceptance_reason == "useful_expression"
-        assert learning.due_count() == 1
+        assert learning.due_count() == 0
         context = LearningContextBuilder(learning_repository).build(now)
-        assert context is not None
-        assert "How can I say" in context
+        assert context is None
 
         assert provider.learning_signal is not None
         learning.capture_conversation_signal(request=request, candidate=provider.learning_signal)
         assert len(learning_repository.occurrences()) == 1
-        assert learning.due_count() == 1
-        item = learning_repository.due_items(user_id="default", now=now)[0]
+        assert learning.due_count() == 0
+        item = learning_repository.get_item(occurrence.learning_item_id, user_id="default")
+        assert item is not None
         assert learning_repository.answers(item) == ["I am exhausted."]
         assert item.stage == 0
-        assert item.next_review_at == now.isoformat()
+        assert item.next_review_at == (now + timedelta(days=1)).isoformat()
+        assert learning_repository.due_count(
+            user_id="default", now=now + timedelta(days=1) - timedelta(microseconds=1)
+        ) == 0
+        assert learning_repository.due_count(
+            user_id="default", now=now + timedelta(days=1)
+        ) == 1
 
+        now += timedelta(days=1)
         review = learning.answer(item_id=item.id, answer="I'm exhausted.")
         assert review.correct is True
         assert review.stage == 1

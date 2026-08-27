@@ -160,8 +160,9 @@ async def test_conversation_practice_reuses_occurrence_and_completion_is_idempot
     assert completed.learning_occurrence_id == occurrence.id
     assert completed.learning_item_id == occurrence.learning_item_id
     assert retried == completed
-    assert learning.due_count() == 1
-    service._clock = lambda: now + timedelta(minutes=61)
+    assert learning.due_count() == 0
+    service._clock = lambda: now + timedelta(days=1)
+    learning._clock = lambda: now + timedelta(days=1)
     later = service.check(ProactiveCheckRequest(idle_seconds=9999, can_present=True))
     assert later is not None
     assert later.kind == "review"

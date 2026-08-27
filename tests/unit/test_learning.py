@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from companion.learning import (
     LearningContextBuilder,
     LearningItemNotDueError,
+    LearningKind,
     LearningRepository,
     LearningService,
 )
@@ -46,6 +47,83 @@ def test_normalization_and_repeated_capture_merge_without_duplicate() -> None:
     assert first.id == second.id
     assert second.accepted_answers == ["How are you?", "How's it going?"]
     assert len(repository.due_items(user_id="default", now=current[0])) == 1
+
+
+@pytest.mark.parametrize("mode", [LanguageHelpMode.HELP, LanguageHelpMode.HINT])
+def test_repeated_assistance_preserves_existing_review_schedule(mode: LanguageHelpMode) -> None:
+    repository, service, current = make_learning()
+    response = (
+        LanguageHelpResponse(natural_expression="I am exhausted.")
+        if mode == LanguageHelpMode.HELP
+        else LanguageHelpResponse(hints=["exhausted"])
+    )
+    item = service.capture_assistance(mode=mode, prompt="我很累", response=response)
+    assert item is not None
+    reviewed = service.answer(item_id=item.id, answer="exhausted")
+    scheduled_at = reviewed.next_review_at
+
+    current[0] += timedelta(hours=1)
+    repeated = service.capture_assistance(mode=mode, prompt="我很累", response=response)
+
+    assert repeated is not None and repeated.id == item.id
+    assert repeated.next_review_at == scheduled_at
+
+
+def test_repeated_conversation_occurrences_preserve_first_and_review_due_times() -> None:
+    repository, service, current = make_learning()
+    first_due = current[0] + timedelta(days=1)
+    first = repository.capture_occurrence(
+        user_id="default",
+        prompt="How can I say I am tired?",
+        kind=LearningKind.EXPRESSION,
+        accepted_answers=["I am tired."],
+        conversation_id="conversation-1",
+        user_message_id="user-1",
+        assistant_message_id="assistant-1",
+        acceptance_reason="useful_expression",
+        now=current[0],
+        first_review_at=first_due,
+    )
+
+    current[0] += timedelta(hours=6)
+    second = repository.capture_occurrence(
+        user_id="default",
+        prompt="How can I say I am tired?",
+        kind=LearningKind.EXPRESSION,
+        accepted_answers=["I'm tired."],
+        conversation_id="conversation-2",
+        user_message_id="user-2",
+        assistant_message_id="assistant-2",
+        acceptance_reason="useful_expression",
+        now=current[0],
+        first_review_at=current[0] + timedelta(days=1),
+    )
+    item = repository.get_item(first.learning_item_id, user_id="default")
+
+    assert second.learning_item_id == first.learning_item_id
+    assert len(repository.occurrences()) == 2
+    assert item is not None and item.next_review_at == first_due.isoformat()
+    assert repository.answers(item) == ["I am tired.", "I'm tired."]
+
+    current[0] = first_due
+    reviewed = service.answer(item_id=item.id, answer="I am tired.")
+    current[0] += timedelta(hours=1)
+    repository.capture_occurrence(
+        user_id="default",
+        prompt="How can I say I am tired?",
+        kind=LearningKind.EXPRESSION,
+        accepted_answers=["I feel tired."],
+        conversation_id="conversation-3",
+        user_message_id="user-3",
+        assistant_message_id="assistant-3",
+        acceptance_reason="useful_expression",
+        now=current[0],
+        first_review_at=current[0] + timedelta(days=1),
+    )
+    item = repository.get_item(item.id, user_id="default")
+
+    assert item is not None and item.next_review_at == reviewed.next_review_at.isoformat()
+    assert len(repository.occurrences()) == 3
 
 
 def test_help_and_hint_have_isolated_answers_and_review_progress() -> None:

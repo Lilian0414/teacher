@@ -28,6 +28,7 @@ class LearningRepository:
         accepted_answers: list[str],
         source_command: str,
         now: datetime,
+        first_review_at: datetime,
         commit: bool = True,
     ) -> LearningItem:
         normalized_prompt = normalize_learning_text(prompt)
@@ -49,7 +50,7 @@ class LearningRepository:
                 accepted_answers=json.dumps(merge_answers([], accepted_answers)),
                 source_command=source_command,
                 stage=0,
-                next_review_at=encoded_now,
+                next_review_at=encode_dt(first_review_at),
                 created_at=encoded_now,
                 updated_at=encoded_now,
             )
@@ -58,7 +59,6 @@ class LearningRepository:
             item.prompt = prompt.strip()
             item.accepted_answers = json.dumps(merge_answers(self.answers(item), accepted_answers))
             item.source_command = source_command
-            item.next_review_at = min(item.next_review_at, encoded_now)
             item.updated_at = encoded_now
         if commit:
             self._session.commit()
@@ -79,6 +79,7 @@ class LearningRepository:
         assistant_message_id: str,
         acceptance_reason: str,
         now: datetime,
+        first_review_at: datetime,
     ) -> LearningOccurrence:
         existing = self.occurrence_for_user_message(user_message_id)
         if existing is not None:
@@ -91,6 +92,7 @@ class LearningRepository:
                 accepted_answers=accepted_answers,
                 source_command="conversation",
                 now=now,
+                first_review_at=first_review_at,
                 commit=False,
             )
             occurrence = LearningOccurrence(
