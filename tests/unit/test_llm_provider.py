@@ -393,6 +393,7 @@ async def test_groq_hint_ignores_help_fields_and_limits_items() -> None:
             '{"alternatives":["I ate an apple today."],'
             '"correction":"I ate an apple today.",'
             '"hints":["ate","an","apple","today"],'
+            '"accepted_answers":["I ate an apple today."],'
             '"natural_expression":"I ate an apple today.",'
             '"notes_zh":"描述今天吃蘋果。"}'
         ]
@@ -403,6 +404,7 @@ async def test_groq_hint_ignores_help_fields_and_limits_items() -> None:
     )
 
     assert response.hints == ["ate", "apple", "today"]
+    assert response.accepted_answers == ["I ate an apple today."]
     assert response.natural_expression is None
     assert response.alternatives == []
 
@@ -411,7 +413,8 @@ async def test_groq_hint_ignores_help_fields_and_limits_items() -> None:
 async def test_groq_hint_repairs_complete_sentence_into_clues() -> None:
     provider = ScriptedGroqProvider(
         [
-            '{"hints":["I am exhausted today.","I have had a long day."]}',
+            '{"hints":["I am exhausted today.","I have had a long day."],'
+            '"accepted_answers":["I am exhausted today."]}',
         ]
     )
 

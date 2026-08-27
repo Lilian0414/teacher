@@ -60,7 +60,8 @@ class RecordingLLMProvider:
             )
         if request.mode == LanguageHelpMode.HINT:
             return LanguageHelpResponse(
-                hints=["cheat on someone", "have an affair", "with Larry"]
+                hints=["cheat on someone", "have an affair", "with Larry"],
+                accepted_answers=["Anny cheated on her partner with Larry."],
             )
         if request.mode == LanguageHelpMode.SAY:
             return LanguageHelpResponse(natural_expression=f"Translated: {request.content}")

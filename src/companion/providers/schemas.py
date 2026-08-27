@@ -34,6 +34,7 @@ class LanguageHelpResponse(BaseModel):
     notes_zh: str | None = None
     correction: str | None = None
     hints: list[str] = Field(default_factory=list, max_length=3)
+    accepted_answers: list[str] = Field(default_factory=list, max_length=3)
 
 
 def contains_cjk(value: str) -> bool:

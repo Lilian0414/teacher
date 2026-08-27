@@ -174,7 +174,7 @@ class LearningService:
         response: LanguageHelpResponse,
     ) -> list[str]:
         if mode == LanguageHelpMode.HINT:
-            return response.hints
+            return [answer for answer in response.accepted_answers if "___" not in answer]
         answers = [
             value
             for value in [response.natural_expression, response.correction, *response.alternatives]
