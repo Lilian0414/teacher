@@ -13,6 +13,7 @@ from companion.api.dependencies import (
 )
 from companion.availability import AvailabilityService
 from companion.learning import LearningRepository, LearningService
+from companion.learning.schemas import LearningKind
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.persistence.models import LearningAttempt, LearningItem
@@ -140,48 +141,54 @@ def test_review_hint_does_not_mutate_learning_persistence() -> None:
     now = datetime(2026, 7, 19, 12, tzinfo=UTC)
     repository = LearningRepository(session)
     learning_service = LearningService(repository=repository, clock=lambda: now)
+    item = repository.upsert_item(
+        user_id="default",
+        prompt="original prompt",
+        kind=LearningKind.PHRASE,
+        accepted_answers=["original answer"],
+        source_command="hint",
+        now=now,
+        first_review_at=now,
+    )
+    item_id = item.id
 
     app = create_app()
     app.dependency_overrides[get_learning_service] = lambda: learning_service
     app.dependency_overrides[get_llm_provider] = lambda: FakeLLMProvider()
 
-    with TestClient(app) as client:
-        captured = client.post(
-            "/v1/commands/execute", json={"raw": "/hint original prompt"}
-        ).json()["learning_item"]
-        item_id = captured["id"]
-        before_items = list(session.scalars(select(LearningItem)))
-        before_state = [
-            (
-                item.id,
-                item.prompt,
-                item.accepted_answers,
-                item.source_command,
-                item.stage,
-                item.next_review_at,
-                item.created_at,
-                item.updated_at,
-            )
-            for item in before_items
-        ]
-        before_attempts = list(session.scalars(select(LearningAttempt)))
+    before_items = list(session.scalars(select(LearningItem)))
+    before_state = [
+        (
+            existing.id,
+            existing.prompt,
+            existing.accepted_answers,
+            existing.source_command,
+            existing.stage,
+            existing.next_review_at,
+            existing.created_at,
+            existing.updated_at,
+        )
+        for existing in before_items
+    ]
+    before_attempts = list(session.scalars(select(LearningAttempt)))
 
+    with TestClient(app) as client:
         response = client.post(f"/v1/review/{item_id}/hint")
 
     session.expire_all()
     after_items = list(session.scalars(select(LearningItem)))
     after_state = [
         (
-            item.id,
-            item.prompt,
-            item.accepted_answers,
-            item.source_command,
-            item.stage,
-            item.next_review_at,
-            item.created_at,
-            item.updated_at,
+            existing.id,
+            existing.prompt,
+            existing.accepted_answers,
+            existing.source_command,
+            existing.stage,
+            existing.next_review_at,
+            existing.created_at,
+            existing.updated_at,
         )
-        for item in after_items
+        for existing in after_items
     ]
     assert response.status_code == 200
     assert response.json()["hints"]
