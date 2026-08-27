@@ -491,6 +491,35 @@ async def get_review(
     return ReviewStateResponse(question=question, complete=question is None)
 
 
+@router.post("/v1/review/{item_id}/hint")
+async def get_review_hint(
+    item_id: str,
+    learning_service: LearningService = LearningDependency,
+    llm_provider: LLMProvider = LLMDependency,
+) -> CommandResponse:
+    """Generate a hint for an existing review item without capturing assistance."""
+    try:
+        prompt = learning_service.review_prompt(item_id)
+    except LearningItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Learning item not found") from exc
+
+    try:
+        help_response = await llm_provider.provide_language_help(
+            LanguageHelpRequest(mode=LanguageHelpMode.HINT, content=prompt)
+        )
+    except LLMConfigurationError as exc:
+        return CommandResponse(command="hint", ok=False, message=str(exc))
+    except LLMProviderError as exc:
+        return CommandResponse(command="hint", ok=False, message=str(exc), retryable=exc.retryable)
+
+    return CommandResponse(
+        command="hint",
+        ok=True,
+        message="Review hint generated.",
+        hints=help_response.hints,
+    )
+
+
 @router.post("/v1/review/{item_id}/answer")
 async def submit_review_answer(
     item_id: str,

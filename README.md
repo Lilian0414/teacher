@@ -412,3 +412,24 @@ pytest
 - 程式內 proactive practice invitation
 
 下一階段的重點會放在整體使用流程、長期 learning loop 的可靠性，以及哪些能力值得進一步發展成更正式的研究或產品題目。
+
+## Optional local review gestures (macOS)
+
+During a review question, **Gestures** (`Ctrl+K`) can enable two local-only camera
+interactions: a stable shrug shows the existing hint without submitting or grading an
+answer, and a stable thumbs-up dismisses the celebration shown after a correct final
+answer. A thumbs-up never grades an answer or changes learning state. Incorrect final
+answers skip the celebration. **Finish** (`Ctrl+F`) always exits the celebration without
+a camera.
+
+Camera support is optional. Install the gesture extra (`pip install -e '.[gestures]'`),
+download compatible MediaPipe Pose Landmarker and Gesture Recognizer task models, and
+set `COMPANION_POSE_MODEL` and `COMPANION_GESTURE_MODEL` to their local paths. On first
+use, allow the terminal camera permission in macOS System Settings. Missing packages,
+models, camera hardware, or permission leave typed and spoken review available. Frames,
+landmarks, and gesture history are processed ephemerally in memory and are never saved
+or uploaded.
+
+Target-Mac UAT: verify `review -> enable Gestures -> shrug -> hint -> type/speak answer`,
+then complete a review correctly and verify both `thumbs-up -> finish` and the Finish
+button. Repeat with camera permission denied to verify both fallbacks.

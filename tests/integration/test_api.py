@@ -2,6 +2,7 @@ from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from companion.api.dependencies import (
@@ -12,8 +13,10 @@ from companion.api.dependencies import (
 )
 from companion.availability import AvailabilityService
 from companion.learning import LearningRepository, LearningService
+from companion.learning.schemas import LearningKind
 from companion.main import create_app
 from companion.persistence.database import Base, make_engine
+from companion.persistence.models import LearningAttempt, LearningItem
 from companion.persistence.repositories import AvailabilityRepository
 from companion.providers.fake import FakeLLMProvider
 
@@ -129,6 +132,68 @@ def test_due_review_count_reflects_pending_items() -> None:
 
     assert before["due_review_count"] == 0
     assert after["due_review_count"] == 1
+
+
+def test_review_hint_does_not_mutate_learning_persistence() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = Session(engine)
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    repository = LearningRepository(session)
+    learning_service = LearningService(repository=repository, clock=lambda: now)
+    item = repository.upsert_item(
+        user_id="default",
+        prompt="original prompt",
+        kind=LearningKind.PHRASE,
+        accepted_answers=["original answer"],
+        source_command="hint",
+        now=now,
+        first_review_at=now,
+    )
+    item_id = item.id
+
+    app = create_app()
+    app.dependency_overrides[get_learning_service] = lambda: learning_service
+    app.dependency_overrides[get_llm_provider] = lambda: FakeLLMProvider()
+
+    before_items = list(session.scalars(select(LearningItem)))
+    before_state = [
+        (
+            existing.id,
+            existing.prompt,
+            existing.accepted_answers,
+            existing.source_command,
+            existing.stage,
+            existing.next_review_at,
+            existing.created_at,
+            existing.updated_at,
+        )
+        for existing in before_items
+    ]
+    before_attempts = list(session.scalars(select(LearningAttempt)))
+
+    with TestClient(app) as client:
+        response = client.post(f"/v1/review/{item_id}/hint")
+
+    session.expire_all()
+    after_items = list(session.scalars(select(LearningItem)))
+    after_state = [
+        (
+            existing.id,
+            existing.prompt,
+            existing.accepted_answers,
+            existing.source_command,
+            existing.stage,
+            existing.next_review_at,
+            existing.created_at,
+            existing.updated_at,
+        )
+        for existing in after_items
+    ]
+    assert response.status_code == 200
+    assert response.json()["hints"]
+    assert after_state == before_state
+    assert list(session.scalars(select(LearningAttempt))) == before_attempts == []
 
 
 def test_command_api_changes_availability() -> None:

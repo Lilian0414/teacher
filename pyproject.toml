@@ -24,6 +24,10 @@ companion-uat-evidence = "companion.uat_evidence:main"
 companion-uat = "companion.uat:main"
 
 [project.optional-dependencies]
+gestures = [
+  "mediapipe>=0.10,<1.0; sys_platform == 'darwin'",
+  "opencv-python>=4.10,<5.0; sys_platform == 'darwin'",
+]
 dev = [
   "mypy>=1.11,<2.0",
   "pytest>=8.3,<9.0",
