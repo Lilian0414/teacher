@@ -850,7 +850,11 @@ class CompanionTerminal(App[None]):
 
     @staticmethod
     def _format_proactive_status(status: dict[str, Any]) -> str:
-        cadence = str(status.get("cadence", "normal")).title()
+        cadence = (
+            "Runtime default"
+            if status.get("uses_legacy_policy") is True
+            else str(status.get("cadence", "normal")).title()
+        )
         due = int(status.get("due_review_count", 0))
         reason = str(status.get("reason", ""))
         boundary = status.get("not_before") or status.get("availability_expires_at")
@@ -866,7 +870,7 @@ class CompanionTerminal(App[None]):
             "dismissed_today": f"No more invitations today — paused until {when}.",
             "accepted_cooldown": f"Practice cooldown — not before {when}.",
             "daily_limit": "No more invitations today.",
-            "ui_cannot_present": "Proactive is ready when the current activity finishes.",
+            "ui_cannot_present": "Teacher won't interrupt the current activity.",
         }
         if reason == "insufficient_idle":
             minutes = max(1, round(float(status.get("idle_threshold_seconds", 0)) / 60))

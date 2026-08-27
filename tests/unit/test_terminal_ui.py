@@ -1082,6 +1082,33 @@ def test_proactive_summary_uses_core_reason_and_threshold() -> None:
     )
 
 
+def test_proactive_summary_distinguishes_runtime_policy_and_paused_ui() -> None:
+    legacy = CompanionTerminal._format_proactive_status(
+        {
+            "cadence": "normal",
+            "uses_legacy_policy": True,
+            "reason": "insufficient_idle",
+            "idle_threshold_seconds": 20,
+            "due_review_count": 0,
+        }
+    )
+    assert legacy.startswith("Proactive: Runtime default ·")
+    assert "Proactive: Normal" not in legacy
+
+    completed = CompanionTerminal._format_proactive_status(
+        {
+            "cadence": "frequent",
+            "uses_legacy_policy": False,
+            "reason": "ui_cannot_present",
+            "due_review_count": 0,
+        }
+    )
+    assert completed == (
+        "Proactive: Frequent · Teacher won't interrupt the current activity."
+    )
+    assert "ready" not in completed
+
+
 def test_proactive_action_confirmations_use_core_boundary() -> None:
     payload = {"invitation": {"suppress_until": "2026-08-21T17:42:00+00:00"}}
     assert "before 01:42" in CompanionTerminal._format_invitation_suppression(
