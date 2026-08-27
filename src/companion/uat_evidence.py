@@ -45,7 +45,9 @@ def _alembic_head() -> str:
 def configuration_snapshot(settings: Settings) -> dict[str, object]:
     """Return allow-listed settings only; credential values are never included."""
     return {
+        "user_id": settings.user_id,
         "timezone": settings.timezone,
+        "core_url": settings.core_url,
         "llm_provider": settings.llm_provider,
         "groq_model": settings.groq_model,
         "groq_api_key": "present (redacted)" if settings.groq_api_key else "not set",
