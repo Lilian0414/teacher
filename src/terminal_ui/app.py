@@ -13,6 +13,12 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
 from companion.settings import get_settings
+from terminal_ui.gestures import (
+    GestureAdapter,
+    GestureIntent,
+    GestureUnavailableError,
+    OpenCVMediaPipeGestureAdapter,
+)
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
 
@@ -31,6 +37,7 @@ class InteractionMode(StrEnum):
     HELP_RESULT = "help_result"
     REVIEW = "review"
     PRACTICE_PROMPT = "practice_prompt"
+    REVIEW_COMPLETE = "review_complete"
 
 
 class CompanionTerminal(App[None]):
@@ -72,6 +79,8 @@ class CompanionTerminal(App[None]):
         ("ctrl+m", "record_answer", "Speak answer"),
         ("ctrl+x", "stop_recording", "Stop recording"),
         ("ctrl+u", "use_suggestion", "Use this"),
+        ("ctrl+k", "toggle_gestures", "Gestures"),
+        ("ctrl+f", "finish_review", "Finish"),
         ("escape", "cancel_intent", "Try myself"),
     ]
 
@@ -81,6 +90,7 @@ class CompanionTerminal(App[None]):
         recorder: Any | None = None,
         *,
         recording_limit_seconds: float = 30,
+        gesture_adapter: GestureAdapter | None = None,
     ) -> None:
         super().__init__()
         self._core_url = (core_url or get_settings().core_url).rstrip("/")
@@ -142,6 +152,7 @@ class CompanionTerminal(App[None]):
         self._button_actions: dict[str, str] = {}
         self._conversation_id: str | None = None
         self._active_review_item_id: str | None = None
+        self._active_review_prompt: str | None = None
         self._active_review_position = 1
         self._active_review_total = 1
         self._waiting = False
@@ -160,6 +171,10 @@ class CompanionTerminal(App[None]):
         self._recording = False
         self._recording_timeout_task: asyncio.Task[None] | None = None
         self._finishing_recording = False
+        self._gesture_adapter = gesture_adapter or OpenCVMediaPipeGestureAdapter()
+        self._gestures_enabled = False
+        self._gesture_status = "disabled"
+        self._event_loop: asyncio.AbstractEventLoop | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -176,6 +191,7 @@ class CompanionTerminal(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self._event_loop = asyncio.get_running_loop()
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
         self.set_interval(
@@ -188,6 +204,10 @@ class CompanionTerminal(App[None]):
         await self.ensure_conversation()
         self._messages.write(self._startup_message(state))
 
+    async def on_unmount(self) -> None:
+        self._gesture_adapter.stop()
+        await self._client.aclose()
+
     # ------------------------------------------------------------------
     # Primary intents (Help me say it / Give me a hint / Review) and the
     # Use this / Hint only / Try myself follow-up to a help suggestion.
@@ -199,6 +219,10 @@ class CompanionTerminal(App[None]):
                 InteractionMode.NORMAL,
                 InteractionMode.PRACTICE_PROMPT,
             )
+        if action == "toggle_gestures":
+            return self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE)
+        if action == "finish_review":
+            return self._mode == InteractionMode.REVIEW_COMPLETE
         if action == "record_answer":
             return self._mode == InteractionMode.REVIEW
         if action == "stop_recording":
@@ -213,6 +237,52 @@ class CompanionTerminal(App[None]):
         if action == "cancel_intent":
             return self._mode != InteractionMode.NORMAL
         return True
+
+    async def action_toggle_gestures(self) -> None:
+        if self._gestures_enabled:
+            self._gesture_adapter.stop()
+            self._gestures_enabled = False
+            self._gesture_status = "disabled"
+            self._messages.write("[system] Gestures disabled.")
+        else:
+            try:
+                self._gesture_adapter.start(self._on_gesture_from_adapter)
+            except GestureUnavailableError as exc:
+                self._gesture_status = "unavailable"
+                self._messages.write(
+                    f"[system] Gestures unavailable: {exc}. "
+                    "Typed and spoken review remain available."
+                )
+            else:
+                self._gestures_enabled = True
+                self._gesture_status = "active"
+                self._messages.write(
+                    "[system] Gestures active (local camera only; nothing is saved or uploaded)."
+                )
+        self._refresh_action_buttons()
+
+    def _on_gesture_from_adapter(self, intent: GestureIntent) -> None:
+        loop = self._event_loop
+        if loop is not None:
+            loop.call_soon_threadsafe(asyncio.create_task, self.handle_gesture(intent))
+
+    async def handle_gesture(self, intent: GestureIntent) -> None:
+        if intent == GestureIntent.UNCERTAINTY and self._mode == InteractionMode.REVIEW:
+            prompt = self._active_review_prompt
+            if prompt is not None:
+                await self._run_guarded(lambda: self._show_review_hint(prompt))
+        elif intent == GestureIntent.THUMBS_UP and self._mode == InteractionMode.REVIEW_COMPLETE:
+            await self.action_finish_review()
+
+    async def _show_review_hint(self, prompt: str) -> None:
+        result = await self._post_command(f"/hint {prompt}")
+        self._messages.write(self._format_command_result(result))
+
+    async def action_finish_review(self) -> None:
+        if self._mode != InteractionMode.REVIEW_COMPLETE:
+            return
+        self._messages.write("Review finished. Great work!")
+        self._reset_to_normal()
 
     async def action_help_intent(self) -> None:
         if self._waiting or self._mode != InteractionMode.NORMAL:
@@ -321,6 +391,9 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             await self._run_guarded(lambda: self._send_command("/review quit"))
             return
+        if self._mode == InteractionMode.REVIEW_COMPLETE:
+            await self.action_finish_review()
+            return
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             await self._run_guarded(self._abandon_practice)
             return
@@ -403,6 +476,7 @@ class CompanionTerminal(App[None]):
             raise ValueError(f"Unsupported capture mode: {mode}")
         self._mode = mode
         self._active_review_item_id = None
+        self._active_review_prompt = None
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "What do you want to say?"
@@ -413,17 +487,21 @@ class CompanionTerminal(App[None]):
     def _reset_to_normal(self) -> None:
         self._mode = InteractionMode.NORMAL
         self._active_review_item_id = None
+        self._active_review_prompt = None
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "Say something..."
         self._after_mode_change()
         self._focus_input()
 
-    def _enter_review(self, item_id: str, *, position: int = 1, total: int = 1) -> None:
+    def _enter_review(
+        self, item_id: str, *, position: int = 1, total: int = 1, prompt: str | None = None
+    ) -> None:
         if not item_id:
             raise ValueError("Review item ID is required")
         self._mode = InteractionMode.REVIEW
         self._active_review_item_id = item_id
+        self._active_review_prompt = prompt
         self._active_review_position = position
         self._active_review_total = total
         self._pending_help_content = None
@@ -471,7 +549,19 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             if self._recording:
                 return [("Stop & submit", "record_answer"), None, ("Cancel", "stop_recording")]
-            return [("Speak answer", "record_answer"), None, ("Stop review", "cancel_intent")]
+            gesture_label = (
+                "Gestures: on" if self._gestures_enabled else f"Gestures: {self._gesture_status}"
+            )
+            return [
+                ("Speak answer", "record_answer"),
+                (gesture_label, "toggle_gestures"),
+                ("Stop review", "cancel_intent"),
+            ]
+        if self._mode == InteractionMode.REVIEW_COMPLETE:
+            gesture_label = (
+                "Gestures: on" if self._gestures_enabled else f"Gestures: {self._gesture_status}"
+            )
+            return [("Finish", "finish_review"), (gesture_label, "toggle_gestures"), None]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
                 return [None, None, ("Retry completion", "cancel_intent")]
@@ -531,6 +621,8 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._run_hint_capture(raw))
         elif self._mode == InteractionMode.HELP_RESULT:
             self._messages.write("Please choose an action: Use this / Hint only / Try myself.")
+        elif self._mode == InteractionMode.REVIEW_COMPLETE:
+            self._messages.write("Please press Finish (Ctrl+F), or give a thumbs-up.")
         elif raw.startswith("/"):
             await self._run_guarded(lambda: self._send_command(raw))
         elif self._mode == InteractionMode.REVIEW:
@@ -697,6 +789,7 @@ class CompanionTerminal(App[None]):
                 str(question["id"]),
                 position=int(question.get("position", 1)),
                 total=int(question.get("total", 1)),
+                prompt=str(question.get("prompt", "")) or None,
             )
             self._messages.write(self._format_review_question(question))
         elif payload.get("review_complete"):
@@ -833,7 +926,18 @@ class CompanionTerminal(App[None]):
                 str(next_question["id"]),
                 position=int(next_question.get("position", 1)),
                 total=int(next_question.get("total", 1)),
+                prompt=str(next_question.get("prompt", "")) or None,
             )
+        elif result.get("correct") and result.get("complete") is True:
+            self._mode = InteractionMode.REVIEW_COMPLETE
+            self._active_review_item_id = None
+            self._active_review_prompt = None
+            self._input.placeholder = "Press Finish or give a thumbs-up..."
+            self._messages.write(
+                "Great job — give yourself a thumbs-up to finish the review. "
+                "You can also press Finish (Ctrl+F)."
+            )
+            self._after_mode_change()
         else:
             self._reset_to_normal()
 

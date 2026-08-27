@@ -197,7 +197,7 @@ async def test_user_can_cancel_active_recording_without_transcription_or_answer(
     assert terminal._input.disabled is False
     assert [str(button.label) for button in terminal._action_buttons] == [
         "Speak answer",
-        "",
+        "Gestures: disabled",
         "Stop review",
     ]
     assert any(
@@ -1262,8 +1262,11 @@ async def test_review_state_survives_interleaved_command_and_advances_on_answer(
     assert terminal._mode == InteractionMode.REVIEW
     await terminal._submit_review_answer("I am tired")
     assert terminal._active_review_item_id is None
-    assert terminal._mode == InteractionMode.NORMAL
+    assert terminal._mode == InteractionMode.REVIEW_COMPLETE
     assert any("Complete" in value for value in sink.values)
+    assert any("thumbs-up" in value for value in sink.values)
+    await terminal.action_finish_review()
+    assert terminal._mode == InteractionMode.NORMAL
     await terminal._client.aclose()
 
 
@@ -1670,7 +1673,7 @@ async def test_review_owns_input_and_blocks_help_or_hint_entry_points() -> None:
     assert terminal._input.placeholder == "Answer the review question..."
     assert [str(button.label) for button in terminal._action_buttons] == [
         "Speak answer",
-        "",
+        "Gestures: disabled",
         "Stop review",
     ]
     assert requests == []
