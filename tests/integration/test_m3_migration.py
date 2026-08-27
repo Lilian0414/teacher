@@ -153,6 +153,7 @@ def test_kind_aware_migration_preserves_legacy_state_and_allows_second_kind(
             accepted_answers=["tired"],
             source_command="hint",
             now=decode_dt("2026-08-26T00:00:00+00:00"),
+            first_review_at=decode_dt("2026-08-26T00:00:00+00:00"),
         )
         attempts = repository.attempts_for("legacy-id")
         occurrences = repository.occurrences()

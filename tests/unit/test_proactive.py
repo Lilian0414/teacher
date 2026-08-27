@@ -66,6 +66,7 @@ def make_service(
             accepted_answers=["Hello"],
             source_command="test",
             now=now[0],
+            first_review_at=now[0],
         )
     preferences = None
     if preferences_update is not None:

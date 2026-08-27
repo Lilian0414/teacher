@@ -20,6 +20,7 @@ from companion.persistence.repositories import decode_dt
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse, contains_cjk
 
 REVIEW_INTERVAL_DAYS = (1, 3, 7, 14, 30)
+CONVERSATION_FIRST_REVIEW_DELAY = timedelta(days=1)
 CHITCHAT = re.compile(
     r"^(?:"
     r"(?:hi|hello|hey)(?:[ ,]+(?:there|how(?: are you|'s it going)))?"
@@ -57,13 +58,16 @@ class LearningService:
         answers = self._reviewable_answers(mode=mode, prompt=prompt, response=response)
         if not answers:
             return None
+        captured_at = self._clock()
         item = self._repository.upsert_item(
             user_id=self._user_id,
             prompt=prompt,
             kind=kind,
             accepted_answers=answers,
             source_command=mode.value,
-            now=self._clock(),
+            now=captured_at,
+            # Explicit assistance is intentionally reviewable immediately.
+            first_review_at=captured_at,
         )
         return self._schema(item)
 
@@ -83,6 +87,7 @@ class LearningService:
         )
         if validated is None:
             return None
+        captured_at = self._clock()
         occurrence = self._repository.capture_occurrence(
             user_id=self._user_id,
             prompt=validated.prompt,
@@ -92,7 +97,8 @@ class LearningService:
             user_message_id=request.user_message_id,
             assistant_message_id=request.assistant_message_id,
             acceptance_reason=candidate.reason.value,
-            now=self._clock(),
+            now=captured_at,
+            first_review_at=captured_at + CONVERSATION_FIRST_REVIEW_DELAY,
         )
         item = self._repository.get_item(occurrence.learning_item_id, user_id=self._user_id)
         assert item is not None
