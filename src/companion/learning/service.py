@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import re
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from companion.clock import Clock, system_clock
 from companion.input_policy import is_materially_han
@@ -23,7 +26,6 @@ from companion.learning.signal_policy import validate_learning_signal
 from companion.persistence.models import LearningItem
 from companion.persistence.repositories import decode_dt
 from companion.providers.errors import LLMProviderError
-from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import (
     LanguageHelpMode,
     LanguageHelpResponse,
@@ -31,6 +33,9 @@ from companion.providers.schemas import (
     SemanticGradeVerdict,
     contains_cjk,
 )
+
+if TYPE_CHECKING:
+    from companion.providers.protocols import LLMProvider
 
 REVIEW_INTERVAL_DAYS = (1, 3, 7, 14, 30)
 CONVERSATION_FIRST_REVIEW_DELAY = timedelta(days=1)
