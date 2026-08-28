@@ -88,6 +88,27 @@ def test_help_capture_review_progression_and_duplicate_submission() -> None:
     assert len(repository.attempts_for(item_id)) == 1
 
 
+def test_chinese_review_answer_preserves_item_stage_schedule_and_attempts() -> None:
+    client, _, repository, _ = make_m3_client()
+    with client:
+        item = client.post("/v1/commands/execute", json={"raw": "/help 我今天很累"}).json()[
+            "learning_item"
+        ]
+        before = repository.get_item(item["id"], user_id="default")
+        assert before is not None
+        before_state = (before.stage, before.next_review_at, before.updated_at)
+        rejected = client.post(
+            f"/v1/review/{item['id']}/answer", json={"answer": "我今天真的很累"}
+        )
+        after = repository.get_item(item["id"], user_id="default")
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"].startswith("Please try saying that in English.")
+    assert after is not None
+    assert (after.stage, after.next_review_at, after.updated_at) == before_state
+    assert repository.attempts_for(item["id"]) == []
+
+
 def test_help_and_hint_same_prompt_remain_distinct_through_api() -> None:
     client, provider, repository, _ = make_m3_client()
 

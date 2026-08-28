@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
+from companion.input_policy import is_materially_chinese
 from companion.learning.context import LearningContextBuilder
 from companion.learning.schemas import LearningSignalRequest
 from companion.learning.service import LearningService
@@ -44,6 +45,10 @@ class MessageNotFoundError(Exception):
 
 
 class AssistantRetryConflictError(Exception):
+    pass
+
+
+class InputLanguageError(Exception):
     pass
 
 
@@ -110,6 +115,8 @@ class ConversationService:
         return recovered
 
     async def send_user_message(self, *, conversation_id: str, content: str) -> SendMessageResult:
+        if is_materially_chinese(content):
+            raise InputLanguageError(content)
         conversation = self._require_conversation(conversation_id)
         if conversation.ended_at is not None:
             raise ConversationEndedError(conversation_id)

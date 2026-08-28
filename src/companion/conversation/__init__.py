@@ -4,6 +4,7 @@ from companion.conversation.service import (
     ConversationEndedError,
     ConversationNotFoundError,
     ConversationService,
+    InputLanguageError,
     MessageNotFoundError,
     SendMessageResult,
 )
@@ -15,5 +16,6 @@ __all__ = [
     "ConversationEndedError",
     "ConversationRepository",
     "ConversationService",
+    "InputLanguageError",
     "SendMessageResult",
 ]

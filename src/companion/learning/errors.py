@@ -4,3 +4,7 @@ class LearningItemNotFoundError(Exception):
 
 class LearningItemNotDueError(Exception):
     pass
+
+
+class ReviewInputLanguageError(Exception):
+    pass

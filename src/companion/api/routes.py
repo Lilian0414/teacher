@@ -20,13 +20,16 @@ from companion.conversation import (
     ConversationEndedError,
     ConversationNotFoundError,
     ConversationService,
+    InputLanguageError,
     MessageNotFoundError,
 )
+from companion.input_policy import ENGLISH_INPUT_REDIRECT
 from companion.learning import (
     LearningItemNotDueError,
     LearningItemNotFoundError,
     LearningService,
     ReviewAnswerRequest,
+    ReviewInputLanguageError,
 )
 from companion.memory import (
     AmbiguousMemoryIdError,
@@ -434,6 +437,8 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except ConversationEndedError as exc:
         raise HTTPException(status_code=409, detail="Conversation has ended") from exc
+    except InputLanguageError as exc:
+        raise HTTPException(status_code=422, detail=ENGLISH_INPUT_REDIRECT) from exc
     return SendMessageResponse(
         ok=result.error is None,
         user_message=result.user_message,
@@ -537,6 +542,8 @@ async def submit_review_answer(
         raise HTTPException(status_code=404, detail="Learning item not found") from exc
     except LearningItemNotDueError as exc:
         raise HTTPException(status_code=409, detail="Learning item is no longer due") from exc
+    except ReviewInputLanguageError as exc:
+        raise HTTPException(status_code=422, detail=ENGLISH_INPUT_REDIRECT) from exc
     return ReviewSubmissionResponse(result=result)
 
 

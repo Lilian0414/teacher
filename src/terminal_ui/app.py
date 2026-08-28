@@ -12,6 +12,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
+from companion.input_policy import ENGLISH_INPUT_REDIRECT, is_materially_chinese
 from companion.settings import get_settings
 from terminal_ui.gestures import (
     GestureAdapter,
@@ -371,6 +372,9 @@ class CompanionTerminal(App[None]):
         if not transcript:
             raise ValueError("Transcription was empty; please retry or type your answer.")
         self._messages.write(f"> 🎤 {transcript}")
+        if is_materially_chinese(transcript):
+            self._messages.write(ENGLISH_INPUT_REDIRECT)
+            return
         await self._submit_review_answer(transcript)
 
     async def action_retry_assistant(self) -> None:
@@ -908,6 +912,9 @@ class CompanionTerminal(App[None]):
         item_id = self._active_review_item_id
         if self._mode != InteractionMode.REVIEW or item_id is None:
             return
+        if is_materially_chinese(answer):
+            self._messages.write(ENGLISH_INPUT_REDIRECT)
+            return
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",
             json={
@@ -944,6 +951,9 @@ class CompanionTerminal(App[None]):
             self._reset_to_normal()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
+        if is_materially_chinese(raw):
+            self._messages.write(ENGLISH_INPUT_REDIRECT)
+            return
         if self._pending_practice_completion is not None:
             await self._finalize_practice()
             return

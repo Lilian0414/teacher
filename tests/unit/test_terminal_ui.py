@@ -106,6 +106,51 @@ async def test_spoken_review_shows_transcript_and_submits_canonical_answer_once(
 
 
 @pytest.mark.asyncio
+async def test_chinese_spoken_review_redirects_without_submitting_or_advancing() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/v1/speech/transcriptions":
+            return httpx.Response(200, json={"transcript": "我今天真的很累"})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    terminal._enter_review("item-1")
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal._transcribe_review_answer(b"wave")
+
+    assert requests == ["/v1/speech/transcriptions"]
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._active_review_item_id == "item-1"
+    assert any(
+        "Please try saying that in English." in str(value)
+        for value in cast(MessageSink, terminal._messages).values
+    )
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_chinese_typed_review_redirects_without_request_or_advancing() -> None:
+    terminal = make_terminal()
+    terminal._enter_review("item-1")
+
+    await terminal._submit_review_answer("我今天真的很累")
+
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._active_review_item_id == "item-1"
+    assert any(
+        "Please try saying that in English." in str(value)
+        for value in cast(MessageSink, terminal._messages).values
+    )
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_microphone_unavailable_keeps_review_for_typed_fallback() -> None:
     terminal = CompanionTerminal(
         recorder=FakeRecorder(error=MicrophoneUnavailableError("Microphone denied."))

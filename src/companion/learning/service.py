@@ -2,7 +2,12 @@ import re
 from datetime import timedelta
 
 from companion.clock import Clock, system_clock
-from companion.learning.errors import LearningItemNotDueError, LearningItemNotFoundError
+from companion.input_policy import is_materially_chinese
+from companion.learning.errors import (
+    LearningItemNotDueError,
+    LearningItemNotFoundError,
+    ReviewInputLanguageError,
+)
 from companion.learning.grading import AnswerGradingPolicy
 from companion.learning.normalization import normalize_learning_text
 from companion.learning.repository import LearningRepository
@@ -131,6 +136,8 @@ class LearningService:
     def answer(
         self, *, item_id: str, answer: str, position: int = 1, total: int = 1
     ) -> ReviewResult:
+        if is_materially_chinese(answer):
+            raise ReviewInputLanguageError(answer)
         now = self._clock()
         item = self._repository.get_item(item_id, user_id=self._user_id)
         if item is None:
