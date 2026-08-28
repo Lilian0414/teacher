@@ -50,7 +50,7 @@ def test_create_conversation_send_message_and_store_both_sides() -> None:
     ]
 
 
-def test_materially_han_chat_redirects_without_calling_conversation_provider() -> None:
+def test_materially_han_chat_is_persisted_but_excluded_from_later_provider_context() -> None:
     engine = make_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     session = Session(engine)
@@ -62,13 +62,29 @@ def test_materially_han_chat_redirects_without_calling_conversation_provider() -
     )
     conversation = service.create_conversation()
 
-    result = __import__("asyncio").run(
+    blocked_result = __import__("asyncio").run(
         service.send_user_message(conversation_id=conversation.id, content="我今天真的很累。")
     )
 
-    assert result.assistant_message is not None
-    assert result.assistant_message.content.startswith("Please try saying that in English.")
+    assert blocked_result.assistant_message is not None
+    redirect = blocked_result.assistant_message.content
+    assert redirect.startswith("Please try saying that in English.")
     assert provider.chat_requests == []
+
+    __import__("asyncio").run(
+        service.send_user_message(conversation_id=conversation.id, content="I feel tired today.")
+    )
+
+    stored_contents = [
+        message.content for message in service.get_conversation(conversation.id).messages
+    ]
+    assert "我今天真的很累。" in stored_contents
+    assert redirect in stored_contents
+    assert len(provider.chat_requests) == 1
+    provider_contents = [message.content for message in provider.chat_requests[0].messages]
+    assert provider_contents == ["I feel tired today."]
+    assert "我今天真的很累。" not in provider_contents
+    assert redirect not in provider_contents
 
 
 def test_conversation_history_persists_across_service_instances(tmp_path: Path) -> None:

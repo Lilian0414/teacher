@@ -248,6 +248,7 @@ class ConversationService:
             ChatMessage(role=message.role, content=message.content)
             for message in recent
             if message.role in {MessageRole.USER.value, MessageRole.ASSISTANT.value}
+            and message.source != BLOCKED_INPUT_SOURCE
         ]
         contexts: list[str] = []
         if self._memory_context_builder is not None:
