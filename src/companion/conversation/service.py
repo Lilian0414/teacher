@@ -5,7 +5,7 @@ from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
 from companion.input_policy import BLOCKED_INPUT_SOURCE, ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.learning.context import LearningContextBuilder
-from companion.learning.schemas import LearningSignalRequest
+from companion.learning.schemas import LearningSignalExtraction, LearningSignalRequest
 from companion.learning.service import LearningService
 from companion.memory.context import MemoryContextBuilder
 from companion.persistence.models import Conversation, Message
@@ -200,10 +200,17 @@ class ConversationService:
                 assistant_content=assistant_message.content,
             )
             try:
-                candidate = await self._llm_provider.extract_learning_signal(request)
-                if candidate is not None:
+                result = await self._llm_provider.extract_learning_signal(request)
+                if isinstance(result, LearningSignalExtraction):
                     self._learning_service.capture_conversation_signal(
-                        request=request, candidate=candidate
+                        request=request,
+                        candidate=result.candidate,
+                        observation=result.observation,
+                    )
+                elif result is not None and not isinstance(result, LearningSignalExtraction):
+                    # Local/test provider compatibility; production extraction is evidence-first.
+                    self._learning_service.capture_conversation_signal(
+                        request=request, candidate=result
                     )
             except Exception:
                 # Learning extraction is best-effort post-processing; chat is already durable.

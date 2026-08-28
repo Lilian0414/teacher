@@ -38,14 +38,17 @@ class ScriptedGroqProvider(GroqLLMProvider):
         )
         self.responses = responses
         self.requests: list[list[dict[str, str]]] = []
+        self.temperatures: list[float] = []
 
     async def _complete(
         self,
         messages: list[dict[str, str]],
         *,
         response_format: dict[str, str] | None,
+        temperature: float = 0.3,
     ) -> str:
         self.requests.append(messages.copy())
+        self.temperatures.append(temperature)
         return self.responses.pop(0)
 
 
@@ -287,6 +290,30 @@ async def test_groq_malformed_learning_signal_fails_safely() -> None:
                 assistant_content="Say: I am very tired.",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_groq_learning_signal_extraction_is_deterministic_without_changing_chat() -> None:
+    provider = ScriptedGroqProvider(
+        [
+            '{"observation":{"error_type":"verb_tense","source_excerpt":"sleep",'
+            '"correction":"slept","confidence":"high"},"candidate":null}',
+            '{"content":"A creative chat reply."}',
+        ]
+    )
+
+    await provider.extract_learning_signal(
+        LearningSignalRequest(
+            conversation_id="conversation-1",
+            user_message_id="user-1",
+            assistant_message_id="assistant-1",
+            user_content="I sleep early yesterday.",
+            assistant_content="You must have been tired.",
+        )
+    )
+    await provider.chat(ChatRequest(messages=[ChatMessage(role="user", content="Hello")]))
+
+    assert provider.temperatures == [0, 0.3]
 
 
 @pytest.mark.asyncio

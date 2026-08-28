@@ -10,8 +10,12 @@ from companion.availability import AvailabilityService
 from companion.conversation import ConversationRepository, ConversationService
 from companion.learning import LearningRepository, LearningService
 from companion.learning.schemas import (
+    LearningErrorType,
     LearningKind,
     LearningSignalCandidate,
+    LearningSignalConfidence,
+    LearningSignalExtraction,
+    LearningSignalObservation,
     LearningSignalReason,
     LearningSignalRequest,
 )
@@ -33,16 +37,24 @@ from tests.support import RecordingLLMProvider
 class ProactiveSignalProvider(RecordingLLMProvider):
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate:
+    ) -> LearningSignalExtraction:
         self.learning_signal_requests.append(request)
-        return LearningSignalCandidate(
-            source_conversation_id=request.conversation_id,
-            source_user_message_id=request.user_message_id,
-            source_assistant_message_id=request.assistant_message_id,
-            kind=LearningKind.EXPRESSION,
-            review_prompt="I went home",
-            accepted_answers=["I went home"],
-            reason=LearningSignalReason.CORRECTION,
+        return LearningSignalExtraction(
+            observation=LearningSignalObservation(
+                error_type=LearningErrorType.OTHER_CORRECTION,
+                source_excerpt="I goed home",
+                correction="I went home",
+                confidence=LearningSignalConfidence.HIGH,
+            ),
+            candidate=LearningSignalCandidate(
+                source_conversation_id=request.conversation_id,
+                source_user_message_id=request.user_message_id,
+                source_assistant_message_id=request.assistant_message_id,
+                kind=LearningKind.EXPRESSION,
+                review_prompt='Correct "I goed home".',
+                accepted_answers=["I went home"],
+                reason=LearningSignalReason.CORRECTION,
+            ),
         )
 
 

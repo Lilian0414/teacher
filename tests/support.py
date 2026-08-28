@@ -1,4 +1,11 @@
-from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
+from companion.learning.schemas import (
+    LearningErrorType,
+    LearningSignalCandidate,
+    LearningSignalConfidence,
+    LearningSignalExtraction,
+    LearningSignalObservation,
+    LearningSignalRequest,
+)
 from companion.memory.schemas import (
     MemoryAnalysis,
     MemoryAnalysisRequest,
@@ -100,8 +107,16 @@ class RecordingLLMProvider:
 
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate | None:
+    ) -> LearningSignalExtraction | LearningSignalCandidate | None:
         self.learning_signal_requests.append(request)
         if self.learning_signal_error is not None:
             raise self.learning_signal_error
-        return self.learning_signal
+        return LearningSignalExtraction(
+            observation=LearningSignalObservation(
+                error_type=LearningErrorType.NONE,
+                source_excerpt="",
+                correction="",
+                confidence=LearningSignalConfidence.LOW,
+            ),
+            candidate=self.learning_signal,
+        )

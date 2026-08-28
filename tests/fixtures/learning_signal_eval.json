@@ -1,0 +1,15 @@
+[
+  {"input":"I was very tired yesterday, so I sleep early.","expected_capture":true,"observation":{"error_type":"verb_tense","source_excerpt":"sleep","correction":"slept","confidence":"high"}},
+  {"input":"I almost miss the bus yesterday.","expected_capture":true,"observation":{"error_type":"verb_tense","source_excerpt":"miss","correction":"missed","confidence":"high"}},
+  {"input":"I recieve a message yesterday.","expected_capture":true,"observation":{"error_type":"spelling","source_excerpt":"recieve","correction":"receive","confidence":"high"}},
+  {"input":"I was very tired yesterday, so I slept early.","expected_capture":false,"observation":{"error_type":"none","source_excerpt":"","correction":"","confidence":"low"}},
+  {"input":"I almost missed the bus yesterday.","expected_capture":false,"observation":{"error_type":"verb_tense","source_excerpt":"missed","correction":"miss","confidence":"medium"}},
+  {"input":"I received a message yesterday.","expected_capture":false,"observation":{"error_type":"spelling","source_excerpt":"received","correction":"receive","confidence":"low"}},
+  {"input":"hey, what's up?","expected_capture":false,"observation":{"error_type":"none","source_excerpt":"","correction":"","confidence":"low"}},
+  {"input":"gonna grab lunch lol","expected_capture":false,"observation":{"error_type":"other_correction","source_excerpt":"gonna","correction":"going to","confidence":"medium"}},
+  {"input":"I use GitHub and OpenAI at https://example.dev/qzrx.","expected_capture":false,"observation":{"error_type":"spelling","source_excerpt":"qzrx","correction":"quiz","confidence":"low"}},
+  {"input":"Miyazaki visited Taipei.","expected_capture":false,"observation":{"error_type":"spelling","source_excerpt":"Miyazaki","correction":"Miyazaky","confidence":"low"}},
+  {"input":"This movie is quite unique.","expected_capture":false,"observation":{"error_type":"word_choice","source_excerpt":"quite unique","correction":"unique","confidence":"medium"}},
+  {"input":"I went home yesterday.","expected_capture":false,"observation":{"error_type":"verb_tense","source_excerpt":"go","correction":"went","confidence":"high"}},
+  {"input":"I recieve the package and then I go home yesterday.","expected_capture":true,"observation":{"error_type":"verb_tense","source_excerpt":"go","correction":"went","confidence":"high"}}
+]
