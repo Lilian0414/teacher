@@ -416,11 +416,13 @@ class CompanionTerminal(App[None]):
         self._recording = False
         self._cancel_recording_timeout()
         self._refresh_action_buttons()
+        self._refresh_practice_panel()
         try:
             audio = await self._recorder.stop()
             await self._transcribe_review_answer(audio)
         finally:
             self._finishing_recording = False
+            self._refresh_practice_panel()
         if from_timeout:
             self._recording_timeout_task = None
 
@@ -628,9 +630,13 @@ class CompanionTerminal(App[None]):
             self._practice_prompt.update(prompt)
         if self._recording:
             self._review_feedback.update("● Recording · Stop & submit or Cancel")
+        elif self._finishing_recording:
+            self._review_feedback.update("Transcribing… · you can still type your answer")
         elif self._gesture_status == "active":
             self._review_feedback.update("Gesture ready · camera stays on this device")
-        elif self._gesture_status == "disabled":
+        elif self._gesture_status == "unavailable":
+            self._review_feedback.update("Camera unavailable · type or speak your answer")
+        else:
             self._review_feedback.update("Gesture off · type or speak your answer")
 
     def _mode_button_specs(self) -> list[tuple[str, str] | None]:

@@ -53,6 +53,10 @@ def render(value: object) -> str:
     return console.export_text().rstrip()
 
 
+def static_text(widget: Any) -> str:
+    return render(widget.render())
+
+
 def make_terminal() -> CompanionTerminal:
     terminal = CompanionTerminal()
     terminal._messages = cast(Any, MessageSink())
@@ -190,6 +194,77 @@ async def test_transcription_retry_creates_only_one_review_attempt() -> None:
     assert transcription_calls == 2
     assert answer_calls == 1
     await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_review_panel_tracks_recording_and_failed_transcription_states() -> None:
+    terminal = CompanionTerminal(recorder=FakeRecorder())
+    terminal._messages = cast(Any, MessageSink())
+    terminal._enter_review("item-1", position=2, total=4, prompt="Translate: 我很累")
+
+    assert terminal._practice_panel.display
+    assert static_text(terminal._practice_title) == "Review · 2 / 4"
+    assert static_text(terminal._practice_prompt) == "Translate: 我很累"
+
+    await terminal.action_record_answer()
+    assert "Recording" in static_text(terminal._review_feedback)
+
+    transcription_started = asyncio.Event()
+    release_transcription = asyncio.Event()
+
+    async def fail_transcription(audio: bytes) -> None:
+        assert audio == b"wave"
+        transcription_started.set()
+        await release_transcription.wait()
+        raise ValueError("Transcription failed")
+
+    terminal._transcribe_review_answer = fail_transcription  # type: ignore[method-assign]
+    submission = asyncio.create_task(terminal.action_record_answer())
+    await transcription_started.wait()
+
+    feedback = static_text(terminal._review_feedback)
+    assert "Transcribing" in feedback
+    assert "Recording" not in feedback
+
+    release_transcription.set()
+    await submission
+    assert terminal._mode == InteractionMode.REVIEW
+    feedback = static_text(terminal._review_feedback)
+    assert "Recording" not in feedback
+    assert "Transcribing" not in feedback
+    assert "type or speak" in feedback
+    await terminal._client.aclose()
+
+
+def test_review_panel_presents_unavailable_gestures_and_completion() -> None:
+    terminal = make_terminal()
+    terminal._enter_review("item-1", prompt="Say hello")
+    terminal._gesture_status = "unavailable"
+    terminal._refresh_practice_panel()
+
+    assert "Camera unavailable" in static_text(terminal._review_feedback)
+    assert terminal._input.disabled is False
+    assert str(terminal._action_buttons[0].label) == "Speak answer"
+
+    terminal._mode = InteractionMode.REVIEW_COMPLETE
+    terminal._refresh_practice_panel()
+    assert static_text(terminal._practice_title) == "Review complete ✓"
+    assert "Great work" in static_text(terminal._practice_prompt)
+    assert not terminal._review_hint_button.display
+
+
+def test_narrow_preview_collapses_without_disabling_review_controls() -> None:
+    terminal = make_terminal()
+    terminal._enter_review("item-1", prompt="Answer me")
+    terminal._gestures_enabled = True
+    terminal._preview_frames.publish([[(1, 2, 3)]], now=1.0)
+
+    terminal._refresh_camera_preview()
+
+    assert terminal.size.width < 90
+    assert not terminal._camera_preview.display
+    assert terminal._practice_panel.display
+    assert str(terminal._action_buttons[0].label) == "Speak answer"
 
 
 @pytest.mark.asyncio
