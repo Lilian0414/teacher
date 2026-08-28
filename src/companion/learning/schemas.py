@@ -63,7 +63,7 @@ class ReviewAnswerRequest(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    correct: bool
+    correct: bool | None
     prompt: str
     submitted_answer: str
     accepted_answers: list[str]
@@ -71,3 +71,5 @@ class ReviewResult(BaseModel):
     next_review_at: datetime
     next_question: ReviewQuestion | None = None
     complete: bool
+    grading_deferred: bool = False
+    feedback: str | None = None

@@ -13,6 +13,9 @@ from companion.providers.schemas import (
     LanguageHelpMode,
     LanguageHelpRequest,
     LanguageHelpResponse,
+    SemanticGradeDecision,
+    SemanticGradeRequest,
+    SemanticGradeVerdict,
     contains_cjk,
 )
 
@@ -29,6 +32,21 @@ class RecordingLLMProvider:
         self.learning_signal: LearningSignalCandidate | None = None
         self.learning_signal_error: Exception | None = None
         self.learning_signal_requests: list[LearningSignalRequest] = []
+        self.semantic_grade_requests: list[SemanticGradeRequest] = []
+        self.semantic_grade_decision = SemanticGradeDecision(
+            verdict=SemanticGradeVerdict.INCORRECT,
+            target_preserved=False,
+            reason="The answer misses the target.",
+        )
+        self.semantic_grade_error: LLMProviderError | None = None
+
+    async def grade_review_answer(
+        self, request: SemanticGradeRequest
+    ) -> SemanticGradeDecision:
+        self.semantic_grade_requests.append(request)
+        if self.semantic_grade_error is not None:
+            raise self.semantic_grade_error
+        return self.semantic_grade_decision
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.chat_requests.append(request)

@@ -28,9 +28,11 @@ from companion.providers.errors import (
     LLMTimeoutError,
 )
 from companion.providers.prompts import (
+    SEMANTIC_GRADE_SYSTEM_PROMPT,
     conversation_system_prompt,
     language_help_repair_prompt,
     language_help_system_prompt,
+    semantic_grade_user_prompt,
 )
 from companion.providers.schemas import (
     ChatRequest,
@@ -38,6 +40,8 @@ from companion.providers.schemas import (
     LanguageHelpMode,
     LanguageHelpRequest,
     LanguageHelpResponse,
+    SemanticGradeDecision,
+    SemanticGradeRequest,
     contains_cjk,
 )
 
@@ -105,6 +109,28 @@ class GroqLLMProvider:
         if not content:
             raise LLMInvalidResponseError("LLM returned an empty chat response")
         return ChatResponse(content=content)
+
+    async def grade_review_answer(self, request: SemanticGradeRequest) -> SemanticGradeDecision:
+        """Run one bounded, structured, learning-target-aware grading request."""
+        self._ensure_configured()
+        content = await self._request_once(
+            {
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": SEMANTIC_GRADE_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": semantic_grade_user_prompt(**request.model_dump()),
+                    },
+                ],
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            }
+        )
+        try:
+            return SemanticGradeDecision.model_validate(json.loads(content))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise LLMInvalidResponseError("LLM returned an invalid semantic grade") from exc
 
     async def provide_language_help(
         self,

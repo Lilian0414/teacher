@@ -12,29 +12,28 @@ from companion.providers.schemas import (
     ChatResponse,
     LanguageHelpRequest,
     LanguageHelpResponse,
+    SemanticGradeDecision,
+    SemanticGradeRequest,
 )
 
 
 class LLMProvider(Protocol):
-    async def chat(self, request: ChatRequest) -> ChatResponse:
-        ...
+    async def grade_review_answer(self, request: SemanticGradeRequest) -> SemanticGradeDecision: ...
+
+    async def chat(self, request: ChatRequest) -> ChatResponse: ...
 
     async def provide_language_help(
         self,
         request: LanguageHelpRequest,
-    ) -> LanguageHelpResponse:
-        ...
+    ) -> LanguageHelpResponse: ...
 
-    async def analyze_memory(self, request: MemoryAnalysisRequest) -> MemoryAnalysis:
-        ...
+    async def analyze_memory(self, request: MemoryAnalysisRequest) -> MemoryAnalysis: ...
 
     async def extract_memory_candidates(
         self,
         request: MemoryExtractionRequest,
-    ) -> list[MemoryCandidate]:
-        ...
+    ) -> list[MemoryCandidate]: ...
 
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate | None:
-        ...
+    ) -> LearningSignalCandidate | None: ...
