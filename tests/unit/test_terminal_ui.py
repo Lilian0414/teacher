@@ -9,7 +9,7 @@ import httpx
 import pytest
 from rich.console import Console
 from rich.markdown import Markdown
-from textual.widgets import Input
+from textual.widgets import Input, Static
 
 from companion.settings import get_settings
 from terminal_ui.app import CompanionTerminal, InteractionMode
@@ -53,8 +53,8 @@ def render(value: object) -> str:
     return console.export_text().rstrip()
 
 
-def static_text(widget: Any) -> str:
-    return render(widget.render())
+def static_text(widget: Static) -> str:
+    return render(widget.renderable)
 
 
 def make_terminal() -> CompanionTerminal:
