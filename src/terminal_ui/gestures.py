@@ -16,6 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from terminal_ui.preview import Frame
+
 
 class GestureIntent(StrEnum):
     UNCERTAINTY = "uncertainty"
@@ -120,6 +122,11 @@ class OpenCVMediaPipeGestureAdapter:
         self._camera_index = camera_index
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._preview_callback: Callable[[Frame], None] | None = None
+
+    def set_preview_callback(self, callback: Callable[[Frame], None] | None) -> None:
+        """Share ephemeral frames from the owned capture without another stream."""
+        self._preview_callback = callback
 
     def start(self, callback: Callable[[GestureIntent], None]) -> None:
         if self._thread is not None:
@@ -153,6 +160,8 @@ class OpenCVMediaPipeGestureAdapter:
         self, cv2: Any, mp: Any, capture: Any, callback: Callable[[GestureIntent], None]
     ) -> None:
         gate = StableGestureGate()
+        last_preview = float("-inf")
+        last_inference = float("-inf")
         try:
             base = mp.tasks.BaseOptions
             vision = mp.tasks.vision
@@ -171,10 +180,17 @@ class OpenCVMediaPipeGestureAdapter:
                     ok, frame = capture.read()
                     if not ok:
                         break
-                    image = mp.Image(
-                        image_format=mp.ImageFormat.SRGB,
-                        data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-                    )
+                    now = time.monotonic()
+                    preview_callback = self._preview_callback
+                    if preview_callback is not None and now - last_preview >= 0.2:
+                        preview = cv2.resize(frame, (24, 16), interpolation=cv2.INTER_AREA)
+                        preview_callback(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB).tolist())
+                        last_preview = now
+                    if now - last_inference < 0.1:
+                        continue
+                    last_inference = now
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
                     pose_result = pose.detect(image)
                     hand_result = hands.recognize(image)
                     intent = self._classify_results(pose_result, hand_result)
