@@ -118,6 +118,14 @@ def test_gesture_startup_failures_have_specific_learner_messages(
 
 
 def test_monitor_reports_post_start_worker_error() -> None:
+    class AdapterWithWorkerError(OpenCVMediaPipeGestureAdapter):
+        def _read_message(self, *, timeout: float | None = None) -> tuple[str, str, str]:
+            return (
+                "error",
+                GestureFailure.CAMERA_UNAVAILABLE.value,
+                "camera stopped returning frames",
+            )
+
     class FinishedProcess:
         stdin = None
         stdout = None
@@ -125,18 +133,10 @@ def test_monitor_reports_post_start_worker_error() -> None:
         def wait(self, timeout: float) -> None:
             return None
 
-    adapter = OpenCVMediaPipeGestureAdapter()
+    adapter = AdapterWithWorkerError()
     failures: list[GestureUnavailableError] = []
     adapter.set_failure_callback(failures.append)
     adapter._process = cast(Any, FinishedProcess())
-    adapter._read_message = cast(
-        Any,
-        lambda **kwargs: (
-            "error",
-            GestureFailure.CAMERA_UNAVAILABLE.value,
-            "camera stopped returning frames",
-        ),
-    )
 
     adapter._monitor_worker(lambda intent: None)
 
