@@ -2,27 +2,15 @@
 
 Teacher 是一個以「長期陪伴與持續學習」為核心的 AI English Learning Companion。
 
-它不只希望在使用者問問題時給出答案，而是嘗試把日常對話、語言協助、長期記憶、複習排程與主動練習串成一個可以持續運作的學習循環。
+它不只回答當下的問題，而是嘗試把日常對話中的學習訊號、語言協助、長期記憶、間隔複習與主動練習串成一個可以跨時間持續運作的學習循環。
 
-目前專案以 macOS 上的文字介面為主要使用方式，已完成從一般對話、語言協助、learning item、間隔複習、長期記憶，到程式運行期間主動邀請練習的核心流程。
+目前專案以 **macOS + Textual TUI** 為主要使用方式，核心功能已進入 **v0.1.0 release candidate** 階段；目前正在做最後一輪使用者驗收，而不是繼續擴張新功能。
 
-> 專案目前仍在持續迭代。現階段重點不是取代完整語言學習平台，而是驗證：AI 是否能在長期互動中理解「使用者正在學什麼」、保留相關脈絡，並在適當時機重新帶回學習內容。
+> 核心問題不是「AI 能不能回答英文問題」，而是：AI 能不能知道哪些內容值得留下、之後重新帶回來練習，並且在長期互動中維持一致的 learning state。
 
 ---
 
-## 為什麼做 Teacher？
-
-一般聊天型 AI 很擅長回答當下的問題，但一次對話結束後，學習往往也跟著中斷。
-
-例如使用者今天問了：
-
-- 「這句英文怎麼講比較自然？」
-- 「這個單字我一直記不起來。」
-- 「我上次不是有問過這個嗎？」
-
-傳統 chatbot 可以回答這些問題，但不一定會把它們變成之後真正會再次出現的學習內容。
-
-Teacher 想探索的是另一種互動模式：
+## 核心學習循環
 
 ```text
 Conversation
@@ -42,41 +30,43 @@ Proactive practice
 Future conversation
 ```
 
-也就是把「問過一次」變成「之後還會繼續學」。
+Teacher 想把「問過一次」變成「之後真的還會繼續學」。
 
 ---
 
-## 一個實際的使用流程
+## 一個實際流程
 
-假設使用者在聊天時不知道一句英文要怎麼表達：
+使用者可以直接聊天，也可以明確請求語言協助：
 
 ```text
-/help 我昨天太累所以直接睡著了
+/help 我昨天太累所以很早就睡了
 ```
 
-Teacher 會提供自然的英文說法，並把適合學習的內容建立成 learning item。
+Teacher 會提供自然的英文說法，並在適合時建立 learning item。
 
-之後使用者可以輸入：
+一般英文對話本身也會經過 learning-signal extraction。例如：
+
+```text
+I was very tired yesterday, so I sleep early.
+```
+
+系統會嘗試辨識高信心、具體而值得複習的錯誤，例如 `sleep → slept`。learning signal 使用 evidence-first 的 structured extraction，並由 Python 端再次驗證來源片段、修正內容與信心；即使模型已看見明顯修正但沒有產生 candidate，系統也能從合法的高信心 correction evidence 建立一個最小 learning item。
+
+之後使用者可以執行：
 
 ```text
 /review
 ```
 
-系統會一次出一題，根據回答結果更新該 learning item 的 stage 與下一次複習時間。
+Teacher 會依到期順序出題，回答後更新 stage 與下一次複習時間。
 
-答對後，複習間隔會依序延長：
+目前的間隔為：
 
 ```text
 1 → 3 → 7 → 14 → 30 天
 ```
 
-答錯則回到 stage 0，並安排隔天再次複習。
-
-如果程式持續開啟，Teacher 也可以在符合條件時主動提出練習邀請。使用者可以選擇立即開始、稍後再說，或今天不練。
-
-另一方面，一般對話中的部分個人資訊會在對話結束後被整理成長期 memory。之後即使使用者換一種說法聊天，系統仍可以把與目前語境相關的記憶取回，加入新的對話脈絡。
-
-這讓 Teacher 的互動不只停留在單次 prompt-response，而是形成跨對話的連續性。
+回答錯誤則回到 stage 0，安排隔天再次複習。
 
 ---
 
@@ -84,24 +74,40 @@ Teacher 會提供自然的英文說法，並把適合學習的內容建立成 le
 
 ### 1. 一般對話
 
-- 支援持久化的文字對話。
-- 使用可替換的 LLM provider interface。
-- 正式環境目前可使用 Groq；測試使用 `FakeLLMProvider`。
+- 持久化文字對話。
+- 可替換的 LLM provider interface。
+- 正式環境目前使用 Groq；測試使用 fake provider。
 - 對話資料儲存在本機 SQLite。
+- 一般聊天仍是主要互動面，不會把每個錯誤都變成打斷式 grammar checker。
 
-### 2. 即時語言協助
+### 2. Learning signal
 
-Teacher 提供三種不同用途的語言輔助：
+一般英文對話完成後，Teacher 可以擷取最多一個高價值 learning signal。
+
+目前特別處理：
+
+- 明顯 verb tense error。
+- 明顯 spelling error。
+- 其他高信心、具體且可形成獨立複習題的 correction。
+- vocabulary / useful expression 類 learning point。
+
+為降低噪音，correct English、一般 chitchat、harmless informal English、proper names、brands、URLs 與偏風格性的修改不應被大量記錄。
+
+learning-signal extraction 使用 deterministic structured request (`temperature=0`)；一般聊天本身仍保留較自然的生成設定。
+
+### 3. 即時語言協助
 
 ```text
-/help <內容>   解釋英文，或協助把中文／混合輸入轉成自然英文
-/hint <內容>   只提供少量提示，不直接給完整答案
-/say <中文>    翻譯一句話並把結果作為這次對話中的使用者訊息送出
+/help <內容>   解釋英文，或把中文／混合輸入轉成自然英文
+/hint <內容>   提供部分提示，不直接把完整答案交出來
+/say <中文>    翻譯一句話並作為這次對話中的使用者訊息送出
 ```
 
-`/help` 與 `/hint` 可以建立去重後的 learning item；`/say` 不會建立 learning item。
+`/help` 與 `/hint` 可以建立去重後的 learning item；`/say` 不建立 learning item。
 
-### 3. Learning item 與間隔複習
+Textual UI 也提供對應的 Help / Hint / Review 操作與 contextual actions。
+
+### 4. Learning item 與間隔複習
 
 ```text
 /review       開始複習目前到期的 learning item
@@ -109,27 +115,46 @@ Teacher 提供三種不同用途的語言輔助：
 /review quit  離開複習模式
 ```
 
-在 macOS 的複習畫面也可以按 **Speak answer**（或 `Ctrl+M`）錄製五秒回答。
-Teacher 只在記憶體中建立短暫 WAV，交由 Core 使用既有的 `GROQ_API_KEY` 與
-`whisper-large-v3-turbo` 轉錄，顯示 transcript 後再走同一條 review answer path；
-錄音與轉錄失敗時仍可直接打字。第一次使用時請允許終端機存取麥克風；
-若 PortAudio 無法載入，可先執行 `brew install portaudio` 再重新安裝專案。
+Review 使用兩階段 grading：
 
-目前 review 採本機 deterministic grading，不另外呼叫 LLM。
+1. **deterministic fast path**：normalized exact match、safe contraction 等明確案例直接判斷，不呼叫額外模型。
+2. **bounded semantic fallback**：只有 deterministic path 無法確定時，才使用 goal-aware structured semantic judge 判斷自然但等價的回答。
 
-系統會記錄：
+LLM 不直接修改 stage、next review time 或 attempts。最終 learning-state mutation 仍由 Python learning service 負責。
 
-- prompt
-- accepted answer
-- review attempt
-- stage
-- next review time
+如果 semantic judge 回傳 uncertain、timeout、rate limit 或無效回應，Teacher 會採保守的 deferred outcome，而不是把答案默默記成錯誤並改動學習狀態。
 
-回答正確後逐步延長間隔；回答錯誤則重新排程。
+Typed answer 與 spoken transcript 共用同一條 canonical grading path。
 
-### 4. 長期記憶
+### 5. Spoken review
 
-Teacher 可以從已完成的對話中擷取部分使用者資訊，儲存在 SQLite 中。
+在 review 畫面可以按 **Speak answer** 或 `Ctrl+M` 開始錄音：
+
+- 第一次 `Ctrl+M`：開始錄音。
+- 第二次 `Ctrl+M`：停止並送出一次。
+- `Ctrl+X`：取消錄音，不送 STT、不修改 review state。
+- 安全上限為 30 秒，到達上限會自動停止並送出。
+
+音訊只在記憶體中暫存成短 WAV，交由 Core 使用現有 Groq 設定與 `whisper-large-v3-turbo` 轉錄。UI 會先顯示 transcript，再走和打字答案相同的 review grading path。
+
+麥克風或 STT 失敗時，打字複習仍可繼續。
+
+### 6. Local gesture + camera review
+
+Review 中可按 **Gestures** 或 `Ctrl+K` 開啟本機手勢：
+
+- **Thumb_Down** → 顯示既有 read-only hint，不評分、不前進題目。
+- **Thumb_Up** → 只在 `REVIEW_COMPLETE` 狀態完成／關閉 review celebration。
+
+手勢辨識使用 MediaPipe Gesture Recognizer，本機 camera frame 不送到 Core、Groq 或其他遠端服務。
+
+Textual UI 會顯示同一條 camera capture 的彩色 terminal preview；preview 是 mirrored display-only view，gesture inference 使用原始 frame。系統採 latest-frame-only buffering 與節流，不建立無界 frame queue。
+
+Camera index 可透過 `.env` 的 `COMPANION_GESTURE_CAMERA_INDEX` 明確設定，因此不需要為了避免 Continuity Camera 而全域停用 iPhone camera integration。
+
+### 7. 長期記憶
+
+Teacher 可以從已完成的對話中擷取部分使用者資訊並存入 SQLite。
 
 目前 memory category 包含：
 
@@ -140,13 +165,11 @@ Teacher 可以從已完成的對話中擷取部分使用者資訊，儲存在 SQ
 - `health_fitness`
 - `other`
 
-一般聊天時，系統最多取回五筆與目前內容相關的 active memories，加入 LLM context，而不是把整個 memory database 全部送出。
+一般聊天最多取回少量與目前內容相關的 active memories，而不是把整個 memory database 全部塞進 prompt。
 
-除了 lexical / person matching 外，也可以選擇啟用 OpenAI-compatible embeddings，使用 hybrid semantic recall。
+除了 lexical / person matching，也可以選擇啟用 OpenAI-compatible embeddings，進行 hybrid semantic recall。若 embedding provider 不可用、舊資料沒有向量，或 model / dimensions 不相容，系統會退回 lexical / person matching。
 
-若 embedding provider 不可用、舊資料沒有向量、或向量 model / dimensions 不相容，系統會安全退回 lexical / person matching。
-
-### 5. Memory 管理
+### 8. Memory 管理
 
 ```text
 /remember <內容>              明確儲存一筆記憶
@@ -155,164 +178,119 @@ Teacher 可以從已完成的對話中擷取部分使用者資訊，儲存在 SQ
 /forget <memory_id> confirm  確認 soft delete
 ```
 
-刪除採 soft delete，資料會保留在 SQLite 中，但不再參與一般 recall。
+刪除採 soft delete，不再參與一般 recall，但資料仍保留於 SQLite。
 
-### 6. Learning context 回到一般對話
+### 9. Learning context 回到一般對話
 
-除了 life memory 之外，最多三筆到期的 learning goals 也可以加入一般聊天 context。
+除了 life memory，Teacher 也可以把少量到期的 learning goals 放回一般聊天 context。
 
-Learning data 與 life memory 在資料模型與提示中保持分離，避免把「我要學的內容」誤當成「關於我的事實」。
+Learning data 與 life memory 在資料模型與提示中分離，避免把「我要學的內容」誤當成「關於我的事實」。
 
-### 7. 主動練習邀請
+### 10. 主動練習邀請
 
 Teacher 已完成程式運行期間的 proactive practice invitation。
 
-系統會根據 Core 中的 eligibility、cooldown、daily limit、availability 與 review 狀態判斷是否適合邀請。
-
-使用者可以選擇：
+Core 會依 eligibility、cooldown、daily limit、availability 與 review 狀態決定是否適合邀請。使用者可以選擇：
 
 - Start
 - Later
 - Not today
 
-目前主動邀請只會在 Textual UI 正在執行時出現，不包含背景 daemon、macOS notification 或關閉程式後的提醒。
+目前 proactive practice 只在 Textual UI 正在執行時出現；沒有背景 daemon，也不會在程式關閉後送系統通知。
 
 ---
 
 ## Teacher 與一般 Chatbot 的差異
 
-Teacher 的目標並不是增加更多聊天功能，而是維持一個跨時間的 learning state。
-
-目前專案特別關注四個方向：
+Teacher 的重點不是加入更多聊天功能，而是維持一個跨時間的 learning state。
 
 **Conversation continuity**  
-不是每段對話都從零開始，而是可以取回與目前情境相關的長期資訊。
+新的對話不一定從零開始；系統可以取回與目前情境相關的長期資訊。
 
 **Learning continuity**  
-語言協助不只回答一次，也可以進入 learning item 與之後的 review。
+語言協助與一般聊天中的學習訊號可以轉成 learning item，並在未來重新出現。
 
 **Stateful learning**  
-系統記錄學習 stage、review history 與 next review time，而不是只依賴 LLM 自己「記得」。
+stage、review history 與 next review time 是持久化狀態，不依賴 LLM 自己「記得」。
 
-**Proactive interaction**  
-在適合的時機由系統提出練習，而不是永遠等待使用者主動輸入指令。
+**Selective intervention**  
+Teacher 盡量只留下高價值學習訊號，並在適合的時機邀請練習，而不是每句都糾正。
 
----
-
-## 可能延伸的研究／專題方向
-
-目前 Teacher 比較像一個可運作的 prototype，也留下幾個可以繼續深入的問題：
-
-- AI 應該如何判斷一段對話中什麼內容值得成為 learning item？
-- 長期記憶與 learning state 應該如何分離、互相引用與處理衝突？
-- proactive learning intervention 在什麼時間點出現才不會造成干擾？
-- 個人化 retrieval 是否能改善後續學習提示與複習內容？
-- deterministic scheduling 與 LLM-based adaptive scheduling 應如何取捨？
-- 如何評估一個長期 AI learning companion 是否真的提升 retention，而不是只增加互動次數？
-
-目前這些仍屬於後續探索方向，不代表專案已完成相關研究驗證。
+**Lightweight multimodal interaction**  
+Speech-to-text 與簡單 gesture 是 review interaction 的輸入方式，不是獨立的 heavyweight vision / voice agent。
 
 ---
 
 ## 系統架構
 
-目前主要元件如下：
-
 ```text
-┌──────────────────────┐
-│      Textual UI      │
-└──────────┬───────────┘
-           │ HTTP
-           ▼
-┌──────────────────────┐
-│     FastAPI Core     │
-│                      │
-│ Conversation         │
-│ Memory               │
-│ Learning / Review    │
-│ Proactive Practice   │
-└───────┬──────────────┘
-        │
-        ├──────────────► LLM Provider (Groq / Fake)
-        │
-        ├──────────────► Embedding Provider (optional)
-        │
-        ▼
-┌──────────────────────┐
-│ SQLite + SQLAlchemy  │
-│      + Alembic       │
-└──────────────────────┘
+┌────────────────────────┐
+│       Textual UI       │
+│ chat / review / speech │
+│ gesture + preview      │
+└───────────┬────────────┘
+            │ HTTP
+            ▼
+┌────────────────────────┐
+│      FastAPI Core      │
+│                        │
+│ Conversation           │
+│ Learning / Review      │
+│ Memory                 │
+│ Proactive Practice     │
+└───────────┬────────────┘
+            │
+            ├──────────► LLM Provider (Groq / Fake)
+            ├──────────► STT (Groq Whisper)
+            ├──────────► Embedding Provider (optional)
+            ▼
+┌────────────────────────┐
+│ SQLite + SQLAlchemy    │
+│       + Alembic        │
+└────────────────────────┘
+
+Local-only gesture path:
+Camera → MediaPipe Gesture Recognizer → Textual interaction
+       └→ ephemeral mirrored preview
 ```
 
-設計上，UI 不直接操作資料庫。資料、availability、排程與 destructive policy 由 Core 擁有。
+UI 不直接操作資料庫；learning state、availability、review scheduling 與 persistence policy 由 Core 擁有。
 
-目前技術組合主要包含：
+主要技術：
 
-- Python 3.12
+- Python 3.12+
 - FastAPI
 - SQLAlchemy 2.x
 - Alembic
 - SQLite
 - Textual
 - Groq / OpenAI-compatible LLM interface
+- Groq Whisper STT
 - OpenAI-compatible embeddings（optional）
+- MediaPipe + OpenCV（optional gestures）
 - pytest
 - Ruff
-- mypy
+- mypy strict mode
 
-完整的 M0–M4 capability matrix 可參考 [`doc/PROJECT_OVERVIEW.md`](doc/PROJECT_OVERVIEW.md)。
-
----
-
-## 目前邊界
-
-Teacher 目前尚未實作：
-
-- 關閉程式後的背景通知
-- macOS launch agent / background service
-- voice interaction
-- webcam / hardware / file tools
-- private conversation mode
-- memory sensitivity level
-- memory candidate approval UI
-- memory audit history
-- memory conflict / superseded state
-- memory editing
-- proactive-use permission controls
-
-因此，目前的 proactive practice 應理解為「程式內主動邀請」，而不是背景提醒服務。
-
-LangChain、Mem0 與 Letta 目前也不在專案架構中。
+完整 capability matrix 可參考 [`doc/PROJECT_OVERVIEW.md`](doc/PROJECT_OVERVIEW.md)。
 
 ---
 
 ## 安裝與執行（Apple Silicon）
 
-需要 Python 3.12。
-
-如果要使用 semantic memory，另外需要安裝 Ollama。
+需要 Python 3.12 或以上。
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
+
 python -m pip install -r requirements.lock
 python -m pip install --no-deps --no-build-isolation -e .
+
 cp .env.example .env
 ```
 
-在 `.env` 中填入自己的 `GROQ_API_KEY`。
-
-啟動 Ollama：
-
-```bash
-ollama serve
-```
-
-下載目前使用的 embedding model：
-
-```bash
-ollama pull nomic-embed-text
-```
+在 `.env` 中填入自己的 `GROQ_API_KEY`，不要把真實 key commit 到 repository。
 
 初始化／更新資料庫：
 
@@ -328,7 +306,7 @@ companion
 
 `companion` 會一起啟動 Core 與 Textual UI。
 
-開發時也可以分成兩個 process：
+開發時也可以分開啟動：
 
 ```bash
 companion-core
@@ -340,41 +318,35 @@ companion-core
 companion-ui
 ```
 
-預設 SQLite database 位於：
+預設 SQLite database：
 
 ```text
 ~/Library/Application Support/ai-learning-companion/companion.sqlite3
 ```
 
-也可以透過 `COMPANION_DATABASE_URL` 指定其他絕對路徑。
+可用 `COMPANION_DATABASE_URL` 指定其他絕對路徑。
 
 ---
 
-## Groq 與 Semantic Memory 設定
+## Semantic memory（optional）
 
-範例：
+`.env.example` 提供 OpenAI-compatible embedding 設定。若使用 Ollama：
 
-```env
-LLM_PROVIDER=groq
-GROQ_API_KEY=
-GROQ_MODEL=openai/gpt-oss-20b
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-LLM_TIMEOUT_SECONDS=30
-
-MEMORY_CONTEXT_LIMIT=5
-LEARNING_CONTEXT_LIMIT=3
-
-EMBEDDINGS_ENABLED=true
-EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
-EMBEDDING_API_KEY=
-EMBEDDING_MODEL=nomic-embed-text
-EMBEDDING_DIMENSIONS=768
-EMBEDDING_TIMEOUT_SECONDS=10
+```bash
+ollama serve
+ollama pull nomic-embed-text
 ```
 
-請勿把真實 `GROQ_API_KEY` commit 到 repository。
+常用設定：
 
-如果不需要 semantic recall，可以設定：
+```env
+EMBEDDINGS_ENABLED=true
+EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_DIMENSIONS=768
+```
+
+如果不需要 semantic recall：
 
 ```env
 EMBEDDINGS_ENABLED=false
@@ -384,11 +356,97 @@ EMBEDDINGS_ENABLED=false
 
 ---
 
+## Optional local gestures（macOS）
+
+安裝 gesture extra：
+
+```bash
+python -m pip install -e ".[gestures]"
+```
+
+下載相容的 MediaPipe Gesture Recognizer task model，並在 `.env` 設定：
+
+```env
+COMPANION_GESTURE_MODEL=/absolute/path/to/gesture_recognizer.task
+COMPANION_GESTURE_CAMERA_INDEX=0
+```
+
+如果 Continuity Camera 佔用了 index，可把 camera index 改成實際測試可用的 AVFoundation index，例如 `1`。
+
+第一次使用時請允許 Terminal／使用中的終端程式存取 camera。
+
+Core 與 gesture native runtime 的診斷預設寫入：
+
+```text
+~/Library/Logs/ai-learning-companion/core.log
+~/Library/Logs/ai-learning-companion/gestures.log
+```
+
+也可以在 `.env` 用 `COMPANION_CORE_LOG_PATH` / `COMPANION_GESTURE_LOG_PATH` 覆寫。
+
+---
+
+## 常用操作
+
+```text
+/help <內容>          Help me say it
+/hint <內容>          Give me a hint
+/say <中文>           Translate and send as user message
+/review               Start due review
+/review quit          Stop review
+/remember <內容>      Save memory
+/memories [keyword]   Search active memories
+/forget <id>          Preview memory deletion
+/status               Developer / runtime status
+/preferences ...      View or change learning preferences
+```
+
+Keyboard shortcuts：
+
+```text
+Ctrl+H  Help
+Ctrl+G  Hint
+Ctrl+R  Review
+Ctrl+M  Start / stop & submit spoken review answer
+Ctrl+X  Cancel current recording
+Ctrl+K  Toggle gestures during review
+Ctrl+F  Finish review-complete state
+```
+
+---
+
+## Privacy / data boundary
+
+- Conversation、learning state 與 memory 主要持久化在本機 SQLite。
+- Camera frames、preview frames、gesture landmarks / history 不寫入資料庫、不存檔、不上傳。
+- Review audio 是暫時資料；STT 需要送往設定的 Groq transcription endpoint，但專案不持久化原始錄音。
+- `.env` 與 API key 不應 commit。
+- Semantic embeddings 是否使用遠端或本機 provider，取決於你的 `.env` 設定；預設範例以本機 Ollama 為例。
+
+---
+
+## 目前邊界
+
+Teacher v0.1 並不是完整語言學習平台。目前刻意不做：
+
+- 關閉程式後的背景 daemon / 系統通知。
+- Continuous voice conversation。
+- TTS、發音／口音／流暢度評分。
+- 情緒辨識、臉部狀態推論或通用 vision assistant。
+- 任意 camera / hardware / file tool agent。
+- 完整 memory 編輯、審核、敏感度與衝突管理 UI。
+- LLM 自主決定 spaced-review schedule。
+- 正式的 learning-outcome / retention 實驗。
+
+這些是後續可能的研究或產品方向，不是 v0.1 release blocker。
+
+---
+
 ## 驗證
 
-`requirements.lock` 固定 Python 3.12 的 application 與 development dependencies。
+自動測試主要使用 fake provider，因此一般 CI 不需要 API key，也不需要實體 camera / microphone。
 
-安裝後可以執行與 CI 相同的主要檢查：
+主要 gates：
 
 ```bash
 ruff check .
@@ -396,48 +454,34 @@ mypy .
 pytest
 ```
 
-一般自動測試使用 fake provider，並保持 embeddings 關閉，因此不需要 API key。
+Release 前也會做 Alembic upgrade → downgrade → upgrade smoke test 與 `git diff --check`。
+
+真正的 camera、microphone、semantic provider 與完整 long-term interaction 仍需要 target-Mac UAT。
+
+目前 release sign-off 追蹤於 [#101 — v0.1.0 Final user UAT and release sign-off](https://github.com/Lilian0414/teacher/issues/101)。
 
 ---
 
-## 專案狀態
+## 專題／研究定位
 
-目前 M0–M4 核心能力已完成，包括：
+Teacher 不主張自己發明 AI tutoring、long-term memory、spaced repetition、proactive intervention、speech-to-text 或 webcam gestures。
 
-- 基礎 Core / UI / persistence
-- 英文對話與語言協助
-- 長期 memory 與 hybrid semantic recall
-- learning item 與 spaced review
-- learning context retrieval
-- 程式內 proactive practice invitation
+目前比較合理的定位是這些能力的**系統整合與互動模型**：
 
-下一階段的重點會放在整體使用流程、長期 learning loop 的可靠性，以及哪些能力值得進一步發展成更正式的研究或產品題目。
+> **long-term continuity + selective pedagogical intervention + spaced review + lightweight multimodal cues**
 
-## Optional local review gestures (macOS)
+也就是：把一般對話中的學習訊號轉成持久化 learning state，透過 review 與 proactive practice 在未來重新帶回，並以語音與簡單本機 gesture 降低 review interaction 的摩擦。
 
-During a review question, **Gestures** (`Ctrl+K`) can enable two local-only camera
-interactions: a stable thumbs-down shows the existing hint without submitting or grading an
-answer, and a stable thumbs-up dismisses the celebration shown after a correct final
-answer. A thumbs-up never grades an answer or changes learning state. Incorrect final
-answers skip the celebration. **Finish** (`Ctrl+F`) always exits the celebration without
-a camera.
+相關研究與 prior art 持續整理於 [#91 — Related work and literature grounding for Teacher](https://github.com/Lilian0414/teacher/issues/91)。
 
-Camera support is optional. Install the gesture extra (`pip install -e '.[gestures]'`),
-download a compatible MediaPipe Gesture Recognizer task model, copy
-`.env.example` to `.env`, and set `COMPANION_GESTURE_MODEL`
-there to absolute local paths. No shell export is needed. Camera index `0` normally selects
-the built-in Mac camera; persist `COMPANION_GESTURE_CAMERA_INDEX=1` (or another tested
-AVFoundation index) in `.env` if Continuity Camera occupies it. On first use, allow the
-terminal camera permission in macOS System Settings. Missing packages,
-models, camera hardware, or permission leave typed and spoken review available. Frames,
-landmarks, and gesture history are processed ephemerally in memory and are never saved
-or uploaded.
+---
 
-The combined `companion` launcher writes Core diagnostics to
-`~/Library/Logs/ai-learning-companion/core.log`; fd-level MediaPipe diagnostics go to
-`gestures.log` beside it. The `.env` log-path settings shown in `.env.example` override
-these locations. Standalone `companion-core` continues to print to its own terminal.
+## Project status
 
-Target-Mac UAT: verify `review -> enable Gestures -> thumbs-down -> hint -> type/speak answer`,
-then complete a review correctly and verify both `thumbs-up -> finish` and the Finish
-button. Repeat with camera permission denied to verify both fallbacks.
+目前 `pyproject.toml` 版本為 **0.1.0**。
+
+#90 / #93 / #94 / #95 對應的 UI、camera/gesture runtime、learning-signal reliability 與 semantic review grading 工作已完成並進入 `main`。
+
+下一步不是擴充功能，而是完成 #101 的最後使用者驗收與 release sign-off；通過後可把目前版本視為：
+
+> **v0.1.0 — first usable prototype**
