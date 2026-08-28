@@ -11,6 +11,7 @@ from companion.main import create_app
 from companion.persistence.database import Base, make_engine
 from companion.providers.fake import FakeLLMProvider
 from companion.schemas.conversation import MessageRole
+from tests.support import RecordingLLMProvider
 
 
 def test_create_conversation_send_message_and_store_both_sides() -> None:
@@ -47,6 +48,27 @@ def test_create_conversation_send_message_and_store_both_sides() -> None:
         "user",
         "assistant",
     ]
+
+
+def test_materially_han_chat_redirects_without_calling_conversation_provider() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    session = Session(engine)
+    provider = RecordingLLMProvider()
+    service = ConversationService(
+        repository=ConversationRepository(session),
+        llm_provider=provider,
+        clock=lambda: datetime(2026, 7, 19, 12, tzinfo=UTC),
+    )
+    conversation = service.create_conversation()
+
+    result = __import__("asyncio").run(
+        service.send_user_message(conversation_id=conversation.id, content="我今天真的很累。")
+    )
+
+    assert result.assistant_message is not None
+    assert result.assistant_message.content.startswith("Please try saying that in English.")
+    assert provider.chat_requests == []
 
 
 def test_conversation_history_persists_across_service_instances(tmp_path: Path) -> None:

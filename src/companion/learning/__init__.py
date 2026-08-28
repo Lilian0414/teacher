@@ -1,7 +1,11 @@
 """Learning package reserved for M3."""
 
 from companion.learning.context import LearningContextBuilder
-from companion.learning.errors import LearningItemNotDueError, LearningItemNotFoundError
+from companion.learning.errors import (
+    LearningItemNotDueError,
+    LearningItemNotFoundError,
+    ReviewInputLanguageError,
+)
 from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
     LearningItemSchema,
@@ -18,6 +22,7 @@ from companion.learning.service import LearningService
 __all__ = [
     "LearningItemNotDueError",
     "LearningItemNotFoundError",
+    "ReviewInputLanguageError",
     "LearningContextBuilder",
     "LearningItemSchema",
     "LearningKind",

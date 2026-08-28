@@ -12,6 +12,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
+from companion.input_policy import ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.settings import get_settings
 from terminal_ui.gestures import (
     GestureAdapter,
@@ -907,6 +908,9 @@ class CompanionTerminal(App[None]):
     async def _submit_review_answer(self, answer: str) -> None:
         item_id = self._active_review_item_id
         if self._mode != InteractionMode.REVIEW or item_id is None:
+            return
+        if is_materially_han(answer):
+            self._messages.write(ENGLISH_INPUT_REDIRECT)
             return
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",

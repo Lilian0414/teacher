@@ -106,6 +106,37 @@ async def test_spoken_review_shows_transcript_and_submits_canonical_answer_once(
 
 
 @pytest.mark.asyncio
+async def test_materially_han_spoken_review_keeps_same_item_without_submission() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/v1/speech/transcriptions":
+            return httpx.Response(200, json={"transcript": "我不知道答案"})
+        raise AssertionError("Chinese transcript must not be submitted for grading")
+
+    terminal = CompanionTerminal(recorder=FakeRecorder())
+    terminal._messages = cast(Any, MessageSink())
+    terminal._enter_review("item-1")
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+
+    await terminal.action_record_answer()
+    await terminal.action_record_answer()
+
+    assert requests == ["/v1/speech/transcriptions"]
+    assert terminal._mode == InteractionMode.REVIEW
+    assert terminal._active_review_item_id == "item-1"
+    assert any(
+        "Please try saying that in English" in str(value)
+        for value in cast(MessageSink, terminal._messages).values
+    )
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_microphone_unavailable_keeps_review_for_typed_fallback() -> None:
     terminal = CompanionTerminal(
         recorder=FakeRecorder(error=MicrophoneUnavailableError("Microphone denied."))
