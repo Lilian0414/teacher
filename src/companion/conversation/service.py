@@ -201,7 +201,7 @@ class ConversationService:
             )
             try:
                 result = await self._llm_provider.extract_learning_signal(request)
-                if isinstance(result, LearningSignalExtraction) and result.candidate is not None:
+                if isinstance(result, LearningSignalExtraction):
                     self._learning_service.capture_conversation_signal(
                         request=request,
                         candidate=result.candidate,

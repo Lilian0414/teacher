@@ -3,14 +3,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
+from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
     LearningErrorType,
+    LearningKind,
+    LearningSignalCandidate,
     LearningSignalConfidence,
     LearningSignalObservation,
+    LearningSignalReason,
     LearningSignalRequest,
 )
 from companion.learning.service import LearningService
+from companion.persistence.database import Base, make_engine
 
 
 def _request(user_content: str) -> LearningSignalRequest:
@@ -32,6 +38,10 @@ def _request(user_content: str) -> LearningSignalRequest:
         ("sleep", "sleep", LearningErrorType.VERB_TENSE, LearningSignalConfidence.HIGH, False),
         ("sleep", "slept", LearningErrorType.NONE, LearningSignalConfidence.HIGH, False),
         ("sleep", "slept", LearningErrorType.VERB_TENSE, LearningSignalConfidence.MEDIUM, False),
+        ("sleep", "slept", LearningErrorType.VERB_TENSE, LearningSignalConfidence.LOW, False),
+        ("sleep", "slept", LearningErrorType.OTHER_CORRECTION, LearningSignalConfidence.HIGH, True),
+        ("sleep", "slept", LearningErrorType.VERB_TENSE, LearningSignalConfidence.HIGH, True),
+        ("lee", "left", LearningErrorType.VERB_TENSE, LearningSignalConfidence.HIGH, False),
     ],
 )
 def test_correction_evidence_is_bounded_and_high_confidence(
@@ -53,13 +63,65 @@ def test_correction_evidence_is_bounded_and_high_confidence(
     ) is expected
 
 
-def test_offline_eval_fixture_covers_required_precision_and_recall_cases() -> None:
+def test_offline_eval_fixture_exercises_candidate_null_capture_behavior() -> None:
     fixture = Path(__file__).parents[1] / "fixtures" / "learning_signal_eval.json"
     cases: list[dict[str, Any]] = json.loads(fixture.read_text())
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
 
-    captures = [case for case in cases if case["expected_capture"]]
-    controls = [case for case in cases if not case["expected_capture"]]
-    assert {case["required_token"] for case in captures} >= {"slept", "missed", "receive"}
-    assert {case["expected_error_type"] for case in captures} >= {"spelling", "verb_tense"}
-    assert len(controls) >= 7
-    assert any(case.get("max_candidates") == 1 for case in captures)
+    with Session(engine) as session:
+        repository = LearningRepository(session)
+        service = LearningService(repository=repository)
+        for index, case in enumerate(cases):
+            request = _request(case["input"]).model_copy(
+                update={
+                    "conversation_id": f"conversation-{index}",
+                    "user_message_id": f"user-{index}",
+                    "assistant_message_id": f"assistant-{index}",
+                }
+            )
+            evidence = case["observation"]
+            observation = LearningSignalObservation.model_validate(evidence)
+            before = len(repository.occurrences())
+
+            item = service.capture_conversation_signal(
+                request=request, candidate=None, observation=observation
+            )
+
+            created = len(repository.occurrences()) - before
+            assert created == int(case["expected_capture"]), case["input"]
+            assert created <= 1
+            if item is not None:
+                assert item.accepted_answers == [evidence["correction"]]
+                assert evidence["source_excerpt"] in item.prompt
+
+
+def test_valid_model_candidate_wins_without_duplicate_fallback() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    request = _request("Yesterday I sleep early.")
+    observation = LearningSignalObservation(
+        error_type=LearningErrorType.VERB_TENSE,
+        source_excerpt="sleep",
+        correction="slept",
+        confidence=LearningSignalConfidence.HIGH,
+    )
+    candidate = LearningSignalCandidate(
+        source_conversation_id=request.conversation_id,
+        source_user_message_id=request.user_message_id,
+        source_assistant_message_id=request.assistant_message_id,
+        kind=LearningKind.PHRASE,
+        review_prompt='Complete: "Yesterday I ___ early."',
+        accepted_answers=["slept"],
+        reason=LearningSignalReason.CORRECTION,
+    )
+
+    with Session(engine) as session:
+        repository = LearningRepository(session)
+        item = LearningService(repository=repository).capture_conversation_signal(
+            request=request, candidate=candidate, observation=observation
+        )
+
+        assert item is not None
+        assert item.prompt == candidate.review_prompt
+        assert len(repository.occurrences()) == 1
