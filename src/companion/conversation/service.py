@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
+from companion.input_policy import BLOCKED_INPUT_SOURCE, ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.learning.context import LearningContextBuilder
 from companion.learning.schemas import LearningSignalRequest
 from companion.learning.service import LearningService
@@ -118,9 +119,24 @@ class ConversationService:
             role=MessageRole.USER,
             content=content,
             language="en",
-            source=ORDINARY_CHAT_SOURCE,
+            source=BLOCKED_INPUT_SOURCE if is_materially_han(content) else ORDINARY_CHAT_SOURCE,
             created_at=self._clock(),
         )
+        if user_message.source == BLOCKED_INPUT_SOURCE:
+            assistant_message = self._repository.add_message(
+                conversation_id=conversation_id,
+                role=MessageRole.ASSISTANT,
+                content=ENGLISH_INPUT_REDIRECT,
+                language="en",
+                source=BLOCKED_INPUT_SOURCE,
+                created_at=self._clock(),
+            )
+            return SendMessageResult(
+                user_message=self._message_schema(user_message),
+                assistant_message=self._message_schema(assistant_message),
+                error=None,
+                retryable=False,
+            )
         return await self._reply_to_user_message(user_message)
 
     async def retry_assistant_reply(
@@ -232,6 +248,7 @@ class ConversationService:
             ChatMessage(role=message.role, content=message.content)
             for message in recent
             if message.role in {MessageRole.USER.value, MessageRole.ASSISTANT.value}
+            and message.source != BLOCKED_INPUT_SOURCE
         ]
         contexts: list[str] = []
         if self._memory_context_builder is not None:

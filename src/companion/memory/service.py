@@ -4,6 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
+from companion.input_policy import BLOCKED_INPUT_SOURCE
 from companion.memory.context import memory_to_schema
 from companion.memory.errors import MemoryError, MemoryNotFoundError, MemoryValidationError
 from companion.memory.repository import MemoryRepository
@@ -104,7 +105,7 @@ class MemoryService:
         messages = [
             MemoryExtractionMessage(id=message.id, role=message.role, content=message.content)
             for message in self._conversation_repository.list_messages(conversation_id)
-            if message.role == MessageRole.USER.value
+            if message.role == MessageRole.USER.value and message.source != BLOCKED_INPUT_SOURCE
         ]
         if not messages:
             self._conversation_repository.finish_extraction(
