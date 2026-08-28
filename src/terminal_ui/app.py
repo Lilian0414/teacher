@@ -15,6 +15,7 @@ from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Stat
 from companion.input_policy import ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.settings import get_settings
 from terminal_ui.gestures import (
+    PREVIEW_INTERVAL_SECONDS,
     GestureAdapter,
     GestureIntent,
     GestureUnavailableError,
@@ -203,6 +204,9 @@ class CompanionTerminal(App[None]):
         set_preview = getattr(self._gesture_adapter, "set_preview_callback", None)
         if callable(set_preview):
             set_preview(self._on_preview_frame)
+        set_failure = getattr(self._gesture_adapter, "set_failure_callback", None)
+        if callable(set_failure):
+            set_failure(self._on_gesture_failure)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -224,7 +228,7 @@ class CompanionTerminal(App[None]):
         self._event_loop = asyncio.get_running_loop()
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
-        self.set_interval(0.125, self._refresh_camera_preview)
+        self.set_interval(PREVIEW_INTERVAL_SECONDS, self._refresh_camera_preview)
         self.set_interval(
             get_settings().proactive_poll_interval_seconds,
             self.check_proactive_invitation,
@@ -320,6 +324,24 @@ class CompanionTerminal(App[None]):
         loop = self._event_loop
         if loop is not None:
             loop.call_soon_threadsafe(asyncio.create_task, self.handle_gesture(intent))
+
+    def _on_gesture_failure(self, error: GestureUnavailableError) -> None:
+        loop = self._event_loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._handle_gesture_failure, error)
+
+    def _handle_gesture_failure(self, error: GestureUnavailableError) -> None:
+        self._gestures_enabled = False
+        self._gesture_status = "unavailable"
+        self._preview_frames.clear()
+        self._camera_preview.display = False
+        self._review_feedback.update(f"{error.learner_message} · type or speak your answer")
+        self._messages.write(
+            f"[system] Gestures unavailable: {error}. "
+            "Typed and spoken review remain available."
+        )
+        self._refresh_action_buttons()
+        self._refresh_practice_panel()
 
     async def handle_gesture(self, intent: GestureIntent) -> None:
         if intent == GestureIntent.UNCERTAINTY and self._mode == InteractionMode.REVIEW:

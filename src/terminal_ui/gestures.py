@@ -37,8 +37,10 @@ _MESSAGES = {
     GestureFailure.MODEL_ASSET_MISSING: "Gesture model files are missing",
     GestureFailure.DEPENDENCY_MISSING: "Gesture support is not installed",
     GestureFailure.CAMERA_UNAVAILABLE: "Camera unavailable or permission denied",
-    GestureFailure.RUNTIME_FAILED: "Gesture runtime could not start",
+    GestureFailure.RUNTIME_FAILED: "Gesture runtime unavailable",
 }
+
+PREVIEW_INTERVAL_SECONDS = 0.125
 
 
 class GestureUnavailableError(RuntimeError):
@@ -198,9 +200,16 @@ def _gesture_worker(
             while not stop_event.is_set():
                 ok, frame = capture.read()
                 if not ok:
-                    break
+                    connection.send(
+                        (
+                            "error",
+                            GestureFailure.CAMERA_UNAVAILABLE.value,
+                            "camera stopped returning frames",
+                        )
+                    )
+                    return
                 now = time.monotonic()
-                if now - last_preview >= 0.125:
+                if now - last_preview >= PREVIEW_INTERVAL_SECONDS:
                     height, width = frame.shape[:2]
                     preview_width = min(32, width)
                     preview_height = max(1, round(height * preview_width / width))
@@ -248,9 +257,15 @@ class OpenCVMediaPipeGestureAdapter:
         self._connection: Connection | None = None
         self._monitor: threading.Thread | None = None
         self._preview_callback: Callable[[Frame], None] | None = None
+        self._failure_callback: Callable[[GestureUnavailableError], None] | None = None
 
     def set_preview_callback(self, callback: Callable[[Frame], None] | None) -> None:
         self._preview_callback = callback
+
+    def set_failure_callback(
+        self, callback: Callable[[GestureUnavailableError], None] | None
+    ) -> None:
+        self._failure_callback = callback
 
     def start(self, callback: Callable[[GestureIntent], None]) -> None:
         if self._process is not None:
@@ -306,6 +321,9 @@ class OpenCVMediaPipeGestureAdapter:
             while self._process is not None:
                 if not connection.poll(0.2):
                     if self._process is not None and not self._process.is_alive():
+                        self._report_worker_failure(
+                            GestureUnavailableError("gesture worker exited unexpectedly")
+                        )
                         return
                     continue
                 message = connection.recv()
@@ -313,8 +331,23 @@ class OpenCVMediaPipeGestureAdapter:
                     callback(GestureIntent(message[1]))
                 elif message[0] == "preview" and self._preview_callback is not None:
                     self._preview_callback(message[1])
+                elif message[0] == "error":
+                    self._report_worker_failure(
+                        GestureUnavailableError(
+                            message[2], failure=GestureFailure(message[1])
+                        )
+                    )
+                    return
         except (EOFError, OSError):
-            return
+            if self._process is not None:
+                self._report_worker_failure(
+                    GestureUnavailableError("gesture worker connection closed unexpectedly")
+                )
+
+    def _report_worker_failure(self, error: GestureUnavailableError) -> None:
+        self.stop()
+        if self._failure_callback is not None:
+            self._failure_callback(error)
 
     def stop(self) -> None:
         process, self._process = self._process, None
