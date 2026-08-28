@@ -6,7 +6,7 @@ import httpx
 from pydantic import ValidationError
 
 from companion.learning.prompts import LEARNING_SIGNAL_SYSTEM_PROMPT, learning_signal_user_prompt
-from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
+from companion.learning.schemas import LearningSignalExtraction, LearningSignalRequest
 from companion.memory.prompts import (
     ANALYSIS_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
@@ -225,7 +225,7 @@ class GroqLLMProvider:
 
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate | None:
+    ) -> LearningSignalExtraction:
         self._ensure_configured()
         content = await self._complete(
             [
@@ -233,10 +233,10 @@ class GroqLLMProvider:
                 {"role": "user", "content": learning_signal_user_prompt(request)},
             ],
             response_format={"type": "json_object"},
+            temperature=0,
         )
         try:
-            candidate = json.loads(content)["candidate"]
-            return None if candidate is None else LearningSignalCandidate.model_validate(candidate)
+            return LearningSignalExtraction.model_validate(json.loads(content))
         except (json.JSONDecodeError, KeyError, TypeError, ValidationError) as exc:
             raise LLMInvalidResponseError("LLM returned invalid learning signal") from exc
 
@@ -245,11 +245,12 @@ class GroqLLMProvider:
         messages: list[dict[str, str]],
         *,
         response_format: dict[str, str] | None,
+        temperature: float = 0.3,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": temperature,
         }
         if response_format is not None:
             payload["response_format"] = response_format

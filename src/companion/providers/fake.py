@@ -1,4 +1,11 @@
-from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
+from companion.learning.schemas import (
+    LearningErrorType,
+    LearningSignalCandidate,
+    LearningSignalConfidence,
+    LearningSignalExtraction,
+    LearningSignalObservation,
+    LearningSignalRequest,
+)
 from companion.memory.schemas import (
     MemoryAnalysis,
     MemoryAnalysisRequest,
@@ -82,8 +89,16 @@ class FakeLLMProvider:
 
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate | None:
-        return self._learning_signal
+    ) -> LearningSignalExtraction:
+        return LearningSignalExtraction(
+            observation=LearningSignalObservation(
+                error_type=LearningErrorType.NONE,
+                source_excerpt="",
+                correction="",
+                confidence=LearningSignalConfidence.LOW,
+            ),
+            candidate=self._learning_signal,
+        )
 
 
 class FailOnceFakeLLMProvider(FakeLLMProvider):

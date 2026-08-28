@@ -15,6 +15,21 @@ class LearningSignalReason(StrEnum):
     USEFUL_EXPRESSION = "useful_expression"
 
 
+class LearningErrorType(StrEnum):
+    SPELLING = "spelling"
+    VERB_TENSE = "verb_tense"
+    SUBJECT_VERB = "subject_verb"
+    WORD_CHOICE = "word_choice"
+    OTHER_CORRECTION = "other_correction"
+    NONE = "none"
+
+
+class LearningSignalConfidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
 class LearningSignalRequest(BaseModel):
     conversation_id: str
     user_message_id: str
@@ -33,6 +48,22 @@ class LearningSignalCandidate(BaseModel):
     review_prompt: str = Field(min_length=1, max_length=500)
     accepted_answers: list[str] = Field(min_length=1, max_length=3)
     reason: LearningSignalReason
+
+
+class LearningSignalObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    error_type: LearningErrorType
+    source_excerpt: str = Field(max_length=500)
+    correction: str = Field(max_length=500)
+    confidence: LearningSignalConfidence
+
+
+class LearningSignalExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation: LearningSignalObservation
+    candidate: LearningSignalCandidate | None
 
 
 class LearningItemSchema(BaseModel):

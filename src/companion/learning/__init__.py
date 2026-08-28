@@ -8,9 +8,13 @@ from companion.learning.errors import (
 )
 from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
+    LearningErrorType,
     LearningItemSchema,
     LearningKind,
     LearningSignalCandidate,
+    LearningSignalConfidence,
+    LearningSignalExtraction,
+    LearningSignalObservation,
     LearningSignalReason,
     LearningSignalRequest,
     ReviewAnswerRequest,
@@ -26,7 +30,11 @@ __all__ = [
     "LearningContextBuilder",
     "LearningItemSchema",
     "LearningKind",
+    "LearningErrorType",
     "LearningSignalCandidate",
+    "LearningSignalConfidence",
+    "LearningSignalExtraction",
+    "LearningSignalObservation",
     "LearningSignalReason",
     "LearningSignalRequest",
     "LearningRepository",

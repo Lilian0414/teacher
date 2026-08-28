@@ -15,9 +15,13 @@ from companion.learning.grading import AnswerGradingPolicy, LocalGrade
 from companion.learning.normalization import normalize_learning_text
 from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
+    LearningErrorType,
     LearningItemSchema,
     LearningKind,
     LearningSignalCandidate,
+    LearningSignalConfidence,
+    LearningSignalObservation,
+    LearningSignalReason,
     LearningSignalRequest,
     ReviewQuestion,
     ReviewResult,
@@ -90,7 +94,11 @@ class LearningService:
         return self._schema(item)
 
     def capture_conversation_signal(
-        self, *, request: LearningSignalRequest, candidate: LearningSignalCandidate
+        self,
+        *,
+        request: LearningSignalRequest,
+        candidate: LearningSignalCandidate,
+        observation: LearningSignalObservation | None = None,
     ) -> LearningItemSchema | None:
         if self._is_chitchat(request.user_content):
             return None
@@ -100,6 +108,9 @@ class LearningService:
             or candidate.source_assistant_message_id != request.assistant_message_id
         ):
             return None
+        if candidate.reason == LearningSignalReason.CORRECTION:
+            if observation is None or not self._valid_correction_evidence(request, observation):
+                return None
         validated = validate_learning_signal(
             prompt=candidate.review_prompt, accepted_answers=candidate.accepted_answers
         )
@@ -121,6 +132,20 @@ class LearningService:
         item = self._repository.get_item(occurrence.learning_item_id, user_id=self._user_id)
         assert item is not None
         return self._schema(item)
+
+    @staticmethod
+    def _valid_correction_evidence(
+        request: LearningSignalRequest, observation: LearningSignalObservation
+    ) -> bool:
+        if (
+            observation.error_type == LearningErrorType.NONE
+            or observation.confidence != LearningSignalConfidence.HIGH
+        ):
+            return False
+        source = normalize_learning_text(observation.source_excerpt)
+        correction = normalize_learning_text(observation.correction)
+        user_content = normalize_learning_text(request.user_content)
+        return bool(source and correction and source != correction and source in user_content)
 
     @staticmethod
     def _is_reviewable(value: str) -> bool:

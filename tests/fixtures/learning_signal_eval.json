@@ -1,0 +1,14 @@
+[
+  {"input":"I was very tired yesterday, so I sleep early.","expected_capture":true,"expected_error_type":"verb_tense","required_token":"slept"},
+  {"input":"I almost miss the bus yesterday.","expected_capture":true,"expected_error_type":"verb_tense","required_token":"missed"},
+  {"input":"I recieve a message yesterday.","expected_capture":true,"expected_error_type":"spelling","required_token":"receive"},
+  {"input":"I was very tired yesterday, so I slept early.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"I almost missed the bus yesterday.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"I received a message yesterday.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"hey, what's up?", "expected_capture":false,"expected_error_type":"none"},
+  {"input":"gonna grab lunch lol", "expected_capture":false,"expected_error_type":"none"},
+  {"input":"I use GitHub and OpenAI at https://example.dev/qzrx.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"Miyazaki visited Taipei.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"This movie is quite unique.","expected_capture":false,"expected_error_type":"none"},
+  {"input":"I recieve the package and then I go home yesterday.","expected_capture":true,"expected_error_type":"verb_tense","required_token":"went","max_candidates":1}
+]

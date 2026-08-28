@@ -58,10 +58,13 @@ def test_signal_policy_rejects_empty_or_clearly_verbose_answers(answer: str) -> 
 def test_learning_signal_prompt_states_standalone_generation_contract() -> None:
     prompt = LEARNING_SIGNAL_SYSTEM_PROMPT
 
-    assert "`candidate=null` is\nbetter" in prompt
+    assert "`candidate=null` is better" in prompt
     assert "standalone, future-facing" in prompt
     assert "no transcript" in prompt
     assert "actual misspelling or token" in prompt
     assert "one to three answers" in prompt
     assert "Copy all source IDs exactly" in prompt
     assert "scheduling metadata" in prompt
+    assert "high-confidence learner correction" in prompt
+    assert "source_excerpt exactly from user_content" in prompt
+    assert "proper names, brands, URLs" in prompt

@@ -1,6 +1,10 @@
 from typing import Protocol
 
-from companion.learning.schemas import LearningSignalCandidate, LearningSignalRequest
+from companion.learning.schemas import (
+    LearningSignalCandidate,
+    LearningSignalExtraction,
+    LearningSignalRequest,
+)
 from companion.memory.schemas import (
     MemoryAnalysis,
     MemoryAnalysisRequest,
@@ -36,4 +40,4 @@ class LLMProvider(Protocol):
 
     async def extract_learning_signal(
         self, request: LearningSignalRequest
-    ) -> LearningSignalCandidate | None: ...
+    ) -> LearningSignalExtraction | LearningSignalCandidate | None: ...
