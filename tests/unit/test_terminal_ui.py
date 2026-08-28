@@ -13,6 +13,7 @@ from textual.widgets import Input, Static
 
 from companion.settings import get_settings
 from terminal_ui.app import CompanionTerminal, InteractionMode
+from terminal_ui.gestures import PREVIEW_INTERVAL_SECONDS
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
 
@@ -439,7 +440,7 @@ async def test_on_mount_uses_configured_proactive_poll_interval(
 
     assert scheduled == [
         (5, terminal.refresh_state),
-        (0.2, terminal._refresh_camera_preview),
+        (PREVIEW_INTERVAL_SECONDS, terminal._refresh_camera_preview),
         (expected_interval, terminal.check_proactive_invitation),
     ]
 

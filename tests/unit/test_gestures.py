@@ -1,3 +1,4 @@
+import subprocess
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -6,8 +7,13 @@ import pytest
 
 from terminal_ui.app import CompanionTerminal, InteractionMode
 from terminal_ui.gestures import (
+    PREVIEW_FPS,
+    PREVIEW_INTERVAL_SECONDS,
+    PREVIEW_PAYLOAD_WIDTH,
+    GestureFailure,
     GestureIntent,
     GestureUnavailableError,
+    OpenCVMediaPipeGestureAdapter,
     Point,
     StableGestureGate,
     classify_shrug,
@@ -21,7 +27,13 @@ class FakeGestureAdapter:
     def __init__(self, error: GestureUnavailableError | None = None) -> None:
         self.error = error
         self.callback: Callable[[GestureIntent], None] | None = None
+        self.failure_callback: Callable[[GestureUnavailableError], None] | None = None
         self.stop_calls = 0
+
+    def set_failure_callback(
+        self, callback: Callable[[GestureUnavailableError], None] | None
+    ) -> None:
+        self.failure_callback = callback
 
     def start(self, callback: Callable[[GestureIntent], None]) -> None:
         if self.error:
@@ -49,6 +61,19 @@ def test_deterministic_gesture_classifiers_cover_positive_and_negative() -> None
     assert not classify_shrug(obscured)
     assert classify_thumb_up([("Thumb_Up", 0.9)])
     assert not classify_thumb_up([("Thumb_Up", 0.69), ("Open_Palm", 0.9)])
+
+
+def test_shrug_accepts_natural_bent_arm_geometry_without_exact_x_ordering() -> None:
+    natural_shrug = shrug_points() | {
+        "left_elbow": Point(0.43, 0.53),
+        "right_elbow": Point(0.57, 0.53),
+        "left_wrist": Point(0.34, 0.49),
+        "right_wrist": Point(0.66, 0.49),
+    }
+
+    assert classify_shrug(natural_shrug)
+    assert not classify_shrug(natural_shrug | {"left_wrist": Point(0.44, 0.49)})
+    assert not classify_shrug(natural_shrug | {"right_elbow": Point(0.57, 0.35)})
 
 
 def test_stability_noise_hold_release_and_cooldown() -> None:
@@ -81,6 +106,12 @@ def test_preview_buffer_is_latest_only_and_throttled() -> None:
     assert frames.take_latest() is None
 
 
+def test_preview_cadence_and_payload_target_are_bounded_at_twelve_fps() -> None:
+    assert PREVIEW_FPS == 12.0
+    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 12)
+    assert PREVIEW_PAYLOAD_WIDTH == 96
+
+
 def test_preview_rendering_downsamples_to_bounded_terminal_dimensions() -> None:
     frame = [
         [(255, 0, 0), (0, 255, 0)],
@@ -89,7 +120,89 @@ def test_preview_rendering_downsamples_to_bounded_terminal_dimensions() -> None:
 
     rendered = render_frame(frame, width=3, height=2)
 
-    assert rendered.plain.splitlines() == ["▀▀▀", "▀▀▀"]
+    assert rendered.plain.splitlines() == ["▀▀▀"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (GestureFailure.MODEL_NOT_CONFIGURED, "models are not configured"),
+        (GestureFailure.MODEL_ASSET_MISSING, "model files are missing"),
+        (GestureFailure.DEPENDENCY_MISSING, "support is not installed"),
+        (GestureFailure.CAMERA_UNAVAILABLE, "Camera unavailable"),
+    ],
+)
+def test_gesture_startup_failures_have_specific_learner_messages(
+    failure: GestureFailure, message: str
+) -> None:
+    error = GestureUnavailableError("diagnostic detail", failure=failure)
+    assert message in error.learner_message
+
+
+def test_monitor_reports_post_start_worker_error() -> None:
+    class AdapterWithWorkerError(OpenCVMediaPipeGestureAdapter):
+        def _read_message(self, *, timeout: float | None = None) -> tuple[str, str, str]:
+            return (
+                "error",
+                GestureFailure.CAMERA_UNAVAILABLE.value,
+                "camera stopped returning frames",
+            )
+
+    class FinishedProcess:
+        stdin = None
+        stdout = None
+
+        def wait(self, timeout: float) -> None:
+            return None
+
+    adapter = AdapterWithWorkerError()
+    failures: list[GestureUnavailableError] = []
+    adapter.set_failure_callback(failures.append)
+    adapter._process = cast(Any, FinishedProcess())
+
+    adapter._monitor_worker(lambda intent: None)
+
+    assert len(failures) == 1
+    assert failures[0].failure == GestureFailure.CAMERA_UNAVAILABLE
+    assert str(failures[0]) == "camera stopped returning frames"
+    assert adapter._process is None
+
+
+def test_subprocess_launch_fd_failure_is_reported_without_leaking_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    pose_model = tmp_path / "pose.task"
+    gesture_model = tmp_path / "gesture.task"
+    pose_model.touch()
+    gesture_model.touch()
+    adapter = OpenCVMediaPipeGestureAdapter(
+        pose_model=pose_model, gesture_model=gesture_model, log_path=tmp_path / "gesture.log"
+    )
+
+    def fail_launch(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("bad value(s) in fds_to_keep")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_launch)
+
+    with pytest.raises(GestureUnavailableError, match="could not launch gesture runtime"):
+        adapter.start(lambda intent: None)
+
+    assert adapter._process is None
+
+
+def test_widescreen_preview_preserves_aspect_ratio() -> None:
+    frame = [[(0, 0, 0)] * 16 for _ in range(9)]
+    rendered = render_frame(frame, width=24, height=8)
+    assert len(rendered.plain.splitlines()) == 7
+    assert all(len(line) == 24 for line in rendered.plain.splitlines())
+
+
+def test_preview_defaults_use_more_panel_space_without_overflowing_box() -> None:
+    frame = [[(0, 0, 0)] * 96 for _ in range(54)]
+    rendered = render_frame(frame)
+    lines = rendered.plain.splitlines()
+    assert len(lines) == 12
+    assert all(len(line) == 43 for line in lines)
 
 
 @pytest.mark.asyncio
@@ -164,4 +277,26 @@ async def test_camera_unavailable_leaves_typed_review_and_finish_fallback_usable
     terminal._refresh_action_buttons()
     await terminal.action_finish_review()
     assert terminal._mode == InteractionMode.NORMAL
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_post_start_failure_deactivates_gestures_without_ending_review() -> None:
+    adapter = FakeGestureAdapter()
+    terminal = CompanionTerminal(gesture_adapter=adapter)
+    terminal._messages = cast(Any, MessageSink())
+    terminal._enter_review("item-1")
+    await terminal.action_toggle_gestures()
+    assert terminal._gestures_enabled
+    assert adapter.failure_callback is not None
+
+    error = GestureUnavailableError(
+        "camera stopped returning frames", failure=GestureFailure.CAMERA_UNAVAILABLE
+    )
+    terminal._handle_gesture_failure(error)
+
+    assert not terminal._gestures_enabled
+    assert terminal._gesture_status == "unavailable"
+    assert terminal._mode == InteractionMode.REVIEW
+    assert "type or speak your answer" in str(terminal._review_feedback.renderable)
     await terminal._client.aclose()

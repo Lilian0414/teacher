@@ -1,4 +1,5 @@
 import multiprocessing
+import os
 import time
 from multiprocessing.process import BaseProcess
 from urllib.error import URLError
@@ -18,6 +19,23 @@ class LauncherError(RuntimeError):
     """Raised when the local Core process cannot be started safely."""
 
 
+def _redirect_process_output(path: str) -> None:
+    """Redirect Python and native fd-level output in the current child process."""
+    log_path = os.path.abspath(os.path.expanduser(path))
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.dup2(descriptor, 1)
+        os.dup2(descriptor, 2)
+    finally:
+        os.close(descriptor)
+
+
+def _combined_core(log_path: str) -> None:
+    _redirect_process_output(log_path)
+    core()
+
+
 def core() -> None:
     """Run the Core API using the shared environment-backed settings."""
     settings = get_settings()
@@ -29,9 +47,7 @@ def _wait_for_core(process: BaseProcess, health_url: str) -> None:
 
     while time.monotonic() < deadline:
         if process.exitcode is not None:
-            raise LauncherError(
-                f"Core exited before becoming ready (exit code {process.exitcode})"
-            )
+            raise LauncherError(f"Core exited before becoming ready (exit code {process.exitcode})")
 
         try:
             with urlopen(health_url, timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as response:
@@ -66,7 +82,7 @@ def local() -> None:
     from terminal_ui.app import run
 
     settings = get_settings()
-    process = multiprocessing.Process(target=core)
+    process = multiprocessing.Process(target=_combined_core, args=(str(settings.core_log_path),))
     process.start()
     try:
         _wait_for_core(process, f"{settings.core_url}/health")

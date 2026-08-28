@@ -65,6 +65,19 @@ def test_settings_can_explicitly_opt_into_dotenv(
     assert Settings(_env_file=dotenv).user_id == "explicit-user"  # type: ignore[call-arg]
 
 
+def test_gesture_runtime_settings_load_from_dotenv(tmp_path: Path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "COMPANION_POSE_MODEL=/tmp/pose.task\n"
+        "COMPANION_GESTURE_MODEL=/tmp/gesture.task\n"
+        "COMPANION_GESTURE_CAMERA_INDEX=2\n"
+    )
+    settings = Settings(_env_file=dotenv)  # type: ignore[call-arg]
+    assert settings.pose_model == Path("/tmp/pose.task")
+    assert settings.gesture_model == Path("/tmp/gesture.task")
+    assert settings.gesture_camera_index == 2
+
+
 def test_proactive_poll_interval_defaults_to_30_seconds() -> None:
     assert Settings(_env_file=None).proactive_poll_interval_seconds == 30  # type: ignore[call-arg]
 

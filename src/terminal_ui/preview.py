@@ -42,21 +42,23 @@ class LatestFrameBuffer:
             self._latest = None
 
 
-def render_frame(frame: Frame, *, width: int = 24, height: int = 8) -> Text:
-    """Downsample an RGB frame and render two vertical pixels per terminal cell."""
+def render_frame(frame: Frame, *, width: int = 48, height: int = 12) -> Text:
+    """Render within a cell box while preserving the source pixel aspect ratio."""
     if width < 1 or height < 1 or not frame or not frame[0]:
         return Text("")
     source_height = len(frame)
     source_width = len(frame[0])
-    pixel_rows = height * 2
+    output_width = min(width, max(1, round(height * 2 * source_width / source_height)))
+    pixel_rows = min(height * 2, max(2, round(output_width * source_height / source_width)))
+    pixel_rows -= pixel_rows % 2
     output = Text()
     for row in range(0, pixel_rows, 2):
         if row:
             output.append("\n")
         upper_y = min(source_height - 1, row * source_height // pixel_rows)
         lower_y = min(source_height - 1, (row + 1) * source_height // pixel_rows)
-        for column in range(width):
-            source_x = min(source_width - 1, column * source_width // width)
+        for column in range(output_width):
+            source_x = min(source_width - 1, column * source_width // output_width)
             upper = frame[upper_y][source_x]
             lower = frame[lower_y][source_x]
             output.append(
