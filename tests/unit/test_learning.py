@@ -59,7 +59,7 @@ def test_repeated_assistance_preserves_existing_review_schedule(mode: LanguageHe
     )
     item = service.capture_assistance(mode=mode, prompt="我很累", response=response)
     assert item is not None
-    reviewed = service.answer(item_id=item.id, answer="exhausted")
+    reviewed = service.answer_deterministically(item_id=item.id, answer="exhausted")
     scheduled_at = reviewed.next_review_at
 
     current[0] += timedelta(hours=1)
@@ -106,7 +106,7 @@ def test_repeated_conversation_occurrences_preserve_first_and_review_due_times()
     assert repository.answers(item) == ["I am tired.", "I'm tired."]
 
     current[0] = first_due
-    reviewed = service.answer(item_id=item.id, answer="I am tired.")
+    reviewed = service.answer_deterministically(item_id=item.id, answer="I am tired.")
     current[0] += timedelta(hours=1)
     repository.capture_occurrence(
         user_id="default",
@@ -149,7 +149,7 @@ def test_help_and_hint_have_isolated_answers_and_review_progress() -> None:
     assert (question.position, question.total, question.remaining) == (1, 2, 2)
     stored = repository.get_item(question.id, user_id="default")
     assert stored is not None
-    result = service.answer(
+    result = service.answer_deterministically(
         item_id=first.id,
         answer="tired",
         position=question.position,
@@ -207,17 +207,17 @@ def test_review_grading_schedule_and_stale_answer_protection() -> None:
     )
     assert item is not None
 
-    correct = service.answer(item_id=item.id, answer="  I AM WORN OUT! ")
+    correct = service.answer_deterministically(item_id=item.id, answer="  I AM WORN OUT! ")
     assert correct.correct is True
     assert correct.stage == 1
     assert correct.next_review_at == current[0] + timedelta(days=1)
     assert len(repository.attempts_for(item.id)) == 1
     with pytest.raises(LearningItemNotDueError):
-        service.answer(item_id=item.id, answer="I am worn out")
+        service.answer_deterministically(item_id=item.id, answer="I am worn out")
     assert len(repository.attempts_for(item.id)) == 1
 
     current[0] += timedelta(days=1)
-    incorrect = service.answer(item_id=item.id, answer="sleepy")
+    incorrect = service.answer_deterministically(item_id=item.id, answer="sleepy")
     assert incorrect.correct is False
     assert incorrect.stage == 0
     assert incorrect.next_review_at == current[0] + timedelta(days=1)
@@ -243,7 +243,7 @@ def test_hint_stores_only_complete_answers_and_grades_uat_sentence() -> None:
 
     assert item is not None
     assert item.accepted_answers == [complete]
-    assert service.answer(item_id=item.id, answer=complete).correct is True
+    assert service.answer_deterministically(item_id=item.id, answer=complete).correct is True
 
     _, unrelated_service, _ = make_learning()
     unrelated_item = unrelated_service.capture_assistance(
@@ -253,7 +253,9 @@ def test_hint_stores_only_complete_answers_and_grades_uat_sentence() -> None:
     )
     assert unrelated_item is not None
     assert (
-        unrelated_service.answer(item_id=unrelated_item.id, answer="I ate an apple.").correct
+        unrelated_service.answer_deterministically(
+            item_id=unrelated_item.id, answer="I ate an apple."
+        ).correct
         is False
     )
 
@@ -271,7 +273,7 @@ def test_safe_contraction_variants_advance_and_record_once(accepted: str, submit
     )
     assert item is not None
 
-    result = service.answer(item_id=item.id, answer=submitted)
+    result = service.answer_deterministically(item_id=item.id, answer=submitted)
 
     assert result.correct is True
     assert result.stage == 1
@@ -308,7 +310,7 @@ def test_grading_failure_happens_before_learning_state_is_persisted() -> None:
     assert item is not None
 
     with pytest.raises(RuntimeError, match="grading failed"):
-        service.answer(item_id=item.id, answer="I'm tired.")
+        service.answer_deterministically(item_id=item.id, answer="I'm tired.")
 
     stored = repository.get_item(item.id, user_id="default")
     assert stored is not None
@@ -327,7 +329,7 @@ def test_interval_caps_at_thirty_days_and_context_is_bounded() -> None:
     )
     assert item is not None
     for days in [1, 3, 7, 14, 30, 30]:
-        result = service.answer(item_id=item.id, answer="I am tired")
+        result = service.answer_deterministically(item_id=item.id, answer="I am tired")
         assert result.next_review_at == current[0] + timedelta(days=days)
         current[0] = result.next_review_at
 
@@ -351,7 +353,7 @@ def test_learning_item_and_attempt_persist_across_sessions(tmp_path: Path) -> No
             response=LanguageHelpResponse(natural_expression="Good morning."),
         )
         assert item is not None
-        first_service.answer(item_id=item.id, answer="Good morning")
+        first_service.answer_deterministically(item_id=item.id, answer="Good morning")
 
     with Session(engine) as session:
         restarted = LearningRepository(session)

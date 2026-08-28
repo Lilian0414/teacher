@@ -13,6 +13,9 @@ from companion.providers.schemas import (
     LanguageHelpMode,
     LanguageHelpRequest,
     LanguageHelpResponse,
+    SemanticGradeDecision,
+    SemanticGradeRequest,
+    SemanticGradeVerdict,
     contains_cjk,
 )
 
@@ -31,6 +34,13 @@ class FakeLLMProvider:
             confidence=1.0,
         )
         self._learning_signal = learning_signal
+
+    async def grade_review_answer(self, request: SemanticGradeRequest) -> SemanticGradeDecision:
+        return SemanticGradeDecision(
+            verdict=SemanticGradeVerdict.INCORRECT,
+            target_preserved=False,
+            reason="The submitted answer does not preserve the review target.",
+        )
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         last_user = next(

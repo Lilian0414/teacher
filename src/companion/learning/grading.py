@@ -1,5 +1,6 @@
 import re
 from collections.abc import Sequence
+from enum import StrEnum
 
 from companion.learning.normalization import normalize_learning_text
 
@@ -32,23 +33,36 @@ class AnswerGradingPolicy:
     """Grade only exact answers and a bounded set of deterministic variants."""
 
     def grade(self, submitted_answer: str, accepted_answers: Sequence[str]) -> bool:
+        return self.deterministic_grade(submitted_answer, accepted_answers) == LocalGrade.CORRECT
+
+    def deterministic_grade(
+        self, submitted_answer: str, accepted_answers: Sequence[str]
+    ) -> "LocalGrade":
         submitted = normalize_learning_text(submitted_answer)
         if not submitted:
-            return False
+            return LocalGrade.INCORRECT
 
         accepted = [normalize_learning_text(answer) for answer in accepted_answers]
         if submitted in accepted:
-            return True
+            return LocalGrade.CORRECT
 
         canonical_submitted = self._canonicalize(submitted)
-        return any(
+        if any(
             canonical_submitted == self._canonicalize(candidate)
             for candidate in accepted
             if candidate
-        )
+        ):
+            return LocalGrade.CORRECT
+        return LocalGrade.NEEDS_SEMANTIC_JUDGE
 
     @staticmethod
     def _canonicalize(value: str) -> str:
         return _SAFE_CONTRACTION_PATTERN.sub(
             lambda match: _SAFE_CONTRACTIONS[match.group(0)], value
         )
+
+
+class LocalGrade(StrEnum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    NEEDS_SEMANTIC_JUDGE = "needs_semantic_judge"

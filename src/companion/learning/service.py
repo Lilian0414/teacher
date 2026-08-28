@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from companion.clock import Clock, system_clock
 from companion.input_policy import is_materially_han
@@ -8,7 +11,7 @@ from companion.learning.errors import (
     LearningItemNotFoundError,
     ReviewInputLanguageError,
 )
-from companion.learning.grading import AnswerGradingPolicy
+from companion.learning.grading import AnswerGradingPolicy, LocalGrade
 from companion.learning.normalization import normalize_learning_text
 from companion.learning.repository import LearningRepository
 from companion.learning.schemas import (
@@ -22,7 +25,17 @@ from companion.learning.schemas import (
 from companion.learning.signal_policy import validate_learning_signal
 from companion.persistence.models import LearningItem
 from companion.persistence.repositories import decode_dt
-from companion.providers.schemas import LanguageHelpMode, LanguageHelpResponse, contains_cjk
+from companion.providers.errors import LLMProviderError
+from companion.providers.schemas import (
+    LanguageHelpMode,
+    LanguageHelpResponse,
+    SemanticGradeRequest,
+    SemanticGradeVerdict,
+    contains_cjk,
+)
+
+if TYPE_CHECKING:
+    from companion.providers.protocols import LLMProvider
 
 REVIEW_INTERVAL_DAYS = (1, 3, 7, 14, 30)
 CONVERSATION_FIRST_REVIEW_DELAY = timedelta(days=1)
@@ -133,9 +146,10 @@ class LearningService:
     def due_count(self) -> int:
         return self._repository.due_count(user_id=self._user_id, now=self._clock())
 
-    def answer(
+    def answer_deterministically(
         self, *, item_id: str, answer: str, position: int = 1, total: int = 1
     ) -> ReviewResult:
+        """Grade without network access (kept for local/internal deterministic callers)."""
         if is_materially_han(answer):
             raise ReviewInputLanguageError
         now = self._clock()
@@ -146,6 +160,98 @@ class LearningService:
             raise LearningItemNotDueError(item_id)
         accepted = self._repository.answers(item)
         correct = self._grading_policy.grade(answer, accepted)
+        return self._record_resolved_answer(
+            item=item,
+            answer=answer,
+            accepted=accepted,
+            correct=correct,
+            now=now,
+            position=position,
+            total=total,
+        )
+
+    async def answer(
+        self,
+        *,
+        item_id: str,
+        answer: str,
+        llm_provider: LLMProvider,
+        position: int = 1,
+        total: int = 1,
+    ) -> ReviewResult:
+        if is_materially_han(answer):
+            raise ReviewInputLanguageError
+        now = self._clock()
+        item = self._repository.get_item(item_id, user_id=self._user_id)
+        if item is None:
+            raise LearningItemNotFoundError(item_id)
+        if decode_dt(item.next_review_at) > now:
+            raise LearningItemNotDueError(item_id)
+        accepted = self._repository.answers(item)
+        local_grade = self._grading_policy.deterministic_grade(answer, accepted)
+        if local_grade == LocalGrade.CORRECT:
+            correct = True
+        elif local_grade == LocalGrade.INCORRECT:
+            correct = False
+        else:
+            try:
+                decision = await llm_provider.grade_review_answer(
+                    SemanticGradeRequest(
+                        review_prompt=item.prompt,
+                        kind=item.kind,
+                        accepted_answers=accepted,
+                        submitted_answer=answer,
+                    )
+                )
+            except LLMProviderError:
+                return self._deferred_result(
+                    item=item,
+                    answer=answer,
+                    accepted=accepted,
+                    position=position,
+                    total=total,
+                )
+            if decision.verdict == SemanticGradeVerdict.CORRECT:
+                if decision.target_preserved is not True:
+                    return self._deferred_result(
+                        item=item,
+                        answer=answer,
+                        accepted=accepted,
+                        position=position,
+                        total=total,
+                    )
+                correct = True
+            elif decision.verdict == SemanticGradeVerdict.INCORRECT:
+                correct = False
+            else:
+                return self._deferred_result(
+                    item=item,
+                    answer=answer,
+                    accepted=accepted,
+                    position=position,
+                    total=total,
+                )
+        return self._record_resolved_answer(
+            item=item,
+            answer=answer,
+            accepted=accepted,
+            correct=correct,
+            now=now,
+            position=position,
+            total=total,
+        )
+
+    def _record_resolved_answer(
+        self,
+        *,
+        item: LearningItem,
+        answer: str,
+        accepted: list[str],
+        correct: bool,
+        now: datetime,
+        position: int,
+        total: int,
+    ) -> ReviewResult:
         stage_after = item.stage + 1 if correct else 0
         interval_index = min(max(stage_after - 1, 0), len(REVIEW_INTERVAL_DAYS) - 1)
         next_review_at = now + timedelta(days=REVIEW_INTERVAL_DAYS[interval_index])
@@ -178,6 +284,28 @@ class LearningService:
             next_review_at=next_review_at,
             next_question=next_question,
             complete=next_question is None,
+        )
+
+    def _deferred_result(
+        self,
+        *,
+        item: LearningItem,
+        answer: str,
+        accepted: list[str],
+        position: int,
+        total: int,
+    ) -> ReviewResult:
+        return ReviewResult(
+            correct=None,
+            prompt=item.prompt,
+            submitted_answer=answer.strip(),
+            accepted_answers=accepted,
+            stage=item.stage,
+            next_review_at=decode_dt(item.next_review_at),
+            next_question=self._question(item, position=position, total=total),
+            complete=False,
+            grading_deferred=True,
+            feedback="I couldn't grade that confidently — try another wording.",
         )
 
     @staticmethod

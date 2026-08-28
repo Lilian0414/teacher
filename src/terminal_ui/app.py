@@ -1388,6 +1388,13 @@ class CompanionTerminal(App[None]):
 
     @staticmethod
     def _format_review_result(result: dict[str, Any]) -> str:
+        if result.get("grading_deferred") is True:
+            feedback = result.get("feedback")
+            return (
+                str(feedback)
+                if feedback
+                else "I couldn't grade that confidently — try another wording."
+            )
         verdict = "Correct" if result.get("correct") else "Incorrect"
         accepted = " / ".join(str(value) for value in result.get("accepted_answers") or [])
         lines = [

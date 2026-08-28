@@ -527,11 +527,13 @@ async def submit_review_answer(
     item_id: str,
     request: ReviewAnswerRequest,
     learning_service: LearningService = LearningDependency,
+    llm_provider: LLMProvider = LLMDependency,
 ) -> ReviewSubmissionResponse:
     try:
-        result = learning_service.answer(
+        result = await learning_service.answer(
             item_id=item_id,
             answer=request.answer,
+            llm_provider=llm_provider,
             position=request.position,
             total=request.total,
         )

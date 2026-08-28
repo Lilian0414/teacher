@@ -102,8 +102,7 @@ async def test_spoken_review_shows_transcript_and_submits_canonical_answer_once(
         "/v1/review/item-1/answer",
     ]
     assert any(
-        "🎤 I fell asleep." in str(value)
-        for value in cast(MessageSink, terminal._messages).values
+        "🎤 I fell asleep." in str(value) for value in cast(MessageSink, terminal._messages).values
     )
     assert terminal._mode == InteractionMode.NORMAL
     await terminal._client.aclose()
@@ -152,9 +151,7 @@ async def test_microphone_unavailable_keeps_review_for_typed_fallback() -> None:
 
     assert terminal._mode == InteractionMode.REVIEW
     assert terminal._active_review_item_id == "item-1"
-    assert any(
-        "still type" in str(value) for value in cast(MessageSink, terminal._messages).values
-    )
+    assert any("still type" in str(value) for value in cast(MessageSink, terminal._messages).values)
     await terminal._client.aclose()
 
 
@@ -306,9 +303,7 @@ async def test_user_can_cancel_active_recording_without_transcription_or_answer(
         "Gestures: disabled",
         "Stop review",
     ]
-    assert any(
-        "still type" in str(value) for value in cast(MessageSink, terminal._messages).values
-    )
+    assert any("still type" in str(value) for value in cast(MessageSink, terminal._messages).values)
     await terminal._client.aclose()
 
 
@@ -341,8 +336,7 @@ async def test_recording_safety_timeout_submits_at_most_once() -> None:
     assert recorder.stop_calls == 1
     assert requests == ["/v1/speech/transcriptions", "/v1/review/item-1/answer"]
     assert any(
-        "safety limit" in str(value)
-        for value in cast(MessageSink, terminal._messages).values
+        "safety limit" in str(value) for value in cast(MessageSink, terminal._messages).values
     )
     await terminal._client.aclose()
 
@@ -1277,6 +1271,19 @@ def test_review_question_and_feedback_are_rendered_without_early_answers() -> No
     assert "Your answer: sleepy" in feedback
     assert "Tue, Aug 11 at 8:00 PM Asia/Taipei" in feedback
     assert "Complete" in feedback
+
+
+def test_deferred_review_feedback_is_not_presented_as_incorrect() -> None:
+    feedback = CompanionTerminal._format_review_result(
+        {
+            "correct": None,
+            "grading_deferred": True,
+            "feedback": "I couldn't grade that confidently — try another wording.",
+        }
+    )
+
+    assert feedback == "I couldn't grade that confidently — try another wording."
+    assert "Incorrect" not in feedback
 
 
 @pytest.mark.parametrize("host_timezone", ["UTC", "Asia/Taipei"])

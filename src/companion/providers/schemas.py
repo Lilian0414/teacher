@@ -37,6 +37,27 @@ class LanguageHelpResponse(BaseModel):
     accepted_answers: list[str] = Field(default_factory=list, max_length=3)
 
 
+class SemanticGradeVerdict(StrEnum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+
+
+class SemanticGradeRequest(BaseModel):
+    review_prompt: str = Field(min_length=1, max_length=500)
+    kind: str = Field(min_length=1, max_length=50)
+    accepted_answers: list[str] = Field(min_length=1, max_length=3)
+    submitted_answer: str = Field(min_length=1, max_length=1000)
+
+
+class SemanticGradeDecision(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    verdict: SemanticGradeVerdict
+    target_preserved: bool | None = None
+    reason: str = Field(min_length=1, max_length=200)
+
+
 def contains_cjk(value: str) -> bool:
     return any(
         "\u3400" <= character <= "\u4dbf"

@@ -91,15 +91,16 @@ async def test_completed_turn_delays_first_review_with_durable_provenance() -> N
         assert learning_repository.answers(item) == ["I am exhausted."]
         assert item.stage == 0
         assert item.next_review_at == (now + timedelta(days=1)).isoformat()
-        assert learning_repository.due_count(
-            user_id="default", now=now + timedelta(days=1) - timedelta(microseconds=1)
-        ) == 0
-        assert learning_repository.due_count(
-            user_id="default", now=now + timedelta(days=1)
-        ) == 1
+        assert (
+            learning_repository.due_count(
+                user_id="default", now=now + timedelta(days=1) - timedelta(microseconds=1)
+            )
+            == 0
+        )
+        assert learning_repository.due_count(user_id="default", now=now + timedelta(days=1)) == 1
 
         now += timedelta(days=1)
-        review = learning.answer(item_id=item.id, answer="I'm exhausted.")
+        review = learning.answer_deterministically(item_id=item.id, answer="I'm exhausted.")
         assert review.correct is True
         assert review.stage == 1
         assert len(learning_repository.attempts_for(item.id)) == 1
@@ -130,9 +131,10 @@ async def test_translated_say_turn_is_not_eligible_for_conversation_learning() -
         assert stored.messages[0].source == "say"
         assert provider.learning_signal_requests == []
         assert learning_repository.occurrences() == []
-        assert learning_repository.due_count(
-            user_id="default", now=datetime.max.replace(tzinfo=UTC)
-        ) == 0
+        assert (
+            learning_repository.due_count(user_id="default", now=datetime.max.replace(tzinfo=UTC))
+            == 0
+        )
 
 
 @pytest.mark.asyncio
@@ -178,9 +180,10 @@ async def test_translated_say_retry_remains_ineligible_without_duplicate_message
         assert stored.messages[0].source == "say"
         assert provider.learning_signal_requests == []
         assert learning_repository.occurrences() == []
-        assert learning_repository.due_count(
-            user_id="default", now=datetime.max.replace(tzinfo=UTC)
-        ) == 0
+        assert (
+            learning_repository.due_count(user_id="default", now=datetime.max.replace(tzinfo=UTC))
+            == 0
+        )
 
 
 @pytest.mark.asyncio
@@ -426,6 +429,4 @@ async def test_context_dependent_signal_creates_no_item_or_occurrence(review_pro
         )
 
         assert repository.occurrences() == []
-        assert repository.due_items(
-            user_id="default", now=datetime.max.replace(tzinfo=UTC)
-        ) == []
+        assert repository.due_items(user_id="default", now=datetime.max.replace(tzinfo=UTC)) == []

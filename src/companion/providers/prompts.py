@@ -1,5 +1,27 @@
 from companion.providers.schemas import LanguageHelpMode
 
+SEMANTIC_GRADE_SYSTEM_PROMPT = """You are a conservative English learning review judge.
+Judge the submitted answer against the actual review prompt, item kind, and every accepted
+answer. Decide whether it answers the question and preserves the specific tested grammar,
+tense, spelling, word, phrase, or meaning. Natural paraphrases may pass only when they preserve
+that target. Wrong tense, negation/opposite meaning, omitted required phrases, unrelated answers,
+partial answers, and target-avoiding paraphrases must not pass. If the target or equivalence is
+ambiguous, return uncertain. Return JSON only with verdict (correct, incorrect, or uncertain),
+target_preserved (true, false, or null), and a learner-safe reason of at most 200 characters."""
+
+
+def semantic_grade_user_prompt(
+    *, review_prompt: str, kind: str, accepted_answers: list[str], submitted_answer: str
+) -> str:
+    return (
+        f"Review prompt: {review_prompt}\n"
+        f"Item kind: {kind}\n"
+        f"Accepted answers: {accepted_answers!r}\n"
+        f"Submitted answer: {submitted_answer}\n"
+        "Evaluate preservation of the learning target, not generic sentence similarity."
+    )
+
+
 _CONVERSATION_CORRECTION_POLICIES = {
     "light": (
         "Correct only very clear, high-value English mistakes. Err on the side of simply "
