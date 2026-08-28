@@ -1,3 +1,4 @@
+import subprocess
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -117,38 +118,53 @@ def test_gesture_startup_failures_have_specific_learner_messages(
 
 
 def test_monitor_reports_post_start_worker_error() -> None:
-    class ErrorConnection:
-        def poll(self, timeout: float) -> bool:
-            return True
-
-        def close(self) -> None:
-            return None
-
-        def recv(self) -> tuple[str, str, str]:
-            return (
-                "error",
-                GestureFailure.CAMERA_UNAVAILABLE.value,
-                "camera stopped returning frames",
-            )
-
     class FinishedProcess:
-        def join(self, timeout: float) -> None:
-            return None
+        stdin = None
+        stdout = None
 
-        def is_alive(self) -> bool:
-            return False
+        def wait(self, timeout: float) -> None:
+            return None
 
     adapter = OpenCVMediaPipeGestureAdapter()
     failures: list[GestureUnavailableError] = []
     adapter.set_failure_callback(failures.append)
-    adapter._connection = cast(Any, ErrorConnection())
     adapter._process = cast(Any, FinishedProcess())
+    adapter._read_message = cast(
+        Any,
+        lambda **kwargs: (
+            "error",
+            GestureFailure.CAMERA_UNAVAILABLE.value,
+            "camera stopped returning frames",
+        ),
+    )
 
     adapter._monitor_worker(lambda intent: None)
 
     assert len(failures) == 1
     assert failures[0].failure == GestureFailure.CAMERA_UNAVAILABLE
     assert str(failures[0]) == "camera stopped returning frames"
+    assert adapter._process is None
+
+
+def test_subprocess_launch_fd_failure_is_reported_without_leaking_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    pose_model = tmp_path / "pose.task"
+    gesture_model = tmp_path / "gesture.task"
+    pose_model.touch()
+    gesture_model.touch()
+    adapter = OpenCVMediaPipeGestureAdapter(
+        pose_model=pose_model, gesture_model=gesture_model, log_path=tmp_path / "gesture.log"
+    )
+
+    def fail_launch(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("bad value(s) in fds_to_keep")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_launch)
+
+    with pytest.raises(GestureUnavailableError, match="could not launch gesture runtime"):
+        adapter.start(lambda intent: None)
+
     assert adapter._process is None
 
 

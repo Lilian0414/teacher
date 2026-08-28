@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import multiprocessing
+import json
 import os
+import selectors
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from multiprocessing.connection import Connection
-from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -159,8 +160,8 @@ def _classify_results(pose_result: Any, hand_result: Any) -> GestureIntent | Non
 
 
 def _gesture_worker(
-    connection: Connection,
-    stop_event: Any,
+    send: Callable[[tuple[Any, ...]], None],
+    should_stop: Callable[[], bool],
     pose_model: str,
     gesture_model: str,
     camera_index: int,
@@ -174,11 +175,11 @@ def _gesture_worker(
             import cv2  # type: ignore[import-not-found]
             import mediapipe as mp  # type: ignore[import-not-found]
         except ImportError as exc:
-            connection.send(("error", GestureFailure.DEPENDENCY_MISSING.value, str(exc)))
+            send(("error", GestureFailure.DEPENDENCY_MISSING.value, str(exc)))
             return
         capture = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
         if not capture.isOpened():
-            connection.send(
+            send(
                 (
                     "error",
                     GestureFailure.CAMERA_UNAVAILABLE.value,
@@ -193,14 +194,14 @@ def _gesture_worker(
         hands = vision.GestureRecognizer.create_from_options(
             vision.GestureRecognizerOptions(base_options=base(model_asset_path=gesture_model))
         )
-        connection.send(("ready",))
+        send(("ready",))
         gate = StableGestureGate()
         last_preview = last_inference = float("-inf")
         with pose, hands:
-            while not stop_event.is_set():
+            while not should_stop():
                 ok, frame = capture.read()
                 if not ok:
-                    connection.send(
+                    send(
                         (
                             "error",
                             GestureFailure.CAMERA_UNAVAILABLE.value,
@@ -218,7 +219,7 @@ def _gesture_worker(
                     )
                     preview = cv2.flip(preview, 1)  # Preview only; inference stays unmirrored.
                     rgb_preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB).tolist()
-                    connection.send(("preview", rgb_preview))
+                    send(("preview", rgb_preview))
                     last_preview = now
                 if now - last_inference < 0.1:
                     continue
@@ -229,13 +230,12 @@ def _gesture_worker(
                     _classify_results(pose.detect(image), hands.recognize(image))
                 )
                 if emitted is not None:
-                    connection.send(("intent", emitted.value))
+                    send(("intent", emitted.value))
     except Exception as exc:
-        connection.send(("error", GestureFailure.RUNTIME_FAILED.value, str(exc)))
+        send(("error", GestureFailure.RUNTIME_FAILED.value, str(exc)))
     finally:
         if capture is not None:
             capture.release()
-        connection.close()
 
 
 class OpenCVMediaPipeGestureAdapter:
@@ -252,9 +252,7 @@ class OpenCVMediaPipeGestureAdapter:
         self._gesture_model = gesture_model or settings.gesture_model
         self._camera_index = settings.gesture_camera_index if camera_index is None else camera_index
         self._log_path = log_path or settings.gesture_log_path
-        self._process: BaseProcess | None = None
-        self._stop_event: Any | None = None
-        self._connection: Connection | None = None
+        self._process: subprocess.Popen[str] | None = None
         self._monitor: threading.Thread | None = None
         self._preview_callback: Callable[[Frame], None] | None = None
         self._failure_callback: Callable[[GestureUnavailableError], None] | None = None
@@ -280,53 +278,67 @@ class OpenCVMediaPipeGestureAdapter:
                 "configured gesture model assets were not found",
                 failure=GestureFailure.MODEL_ASSET_MISSING,
             )
-        context = multiprocessing.get_context("spawn")
-        parent, child = context.Pipe(duplex=False)
-        stop_event = context.Event()
-        process = context.Process(
-            target=_gesture_worker,
-            args=(
-                child,
-                stop_event,
-                str(self._pose_model),
-                str(self._gesture_model),
-                self._camera_index,
-                str(self._log_path),
-            ),
-            daemon=True,
-        )
-        process.start()
-        child.close()
-        if not parent.poll(10):
-            stop_event.set()
-            process.join(timeout=2)
-            if process.is_alive():
-                process.kill()
-            parent.close()
+        command = [
+            sys.executable,
+            "-m",
+            "terminal_ui.gesture_worker",
+            str(self._pose_model),
+            str(self._gesture_model),
+            str(self._camera_index),
+            str(self._log_path),
+        ]
+        try:
+            process = subprocess.Popen(  # noqa: S603 - fixed interpreter/module command
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except (OSError, ValueError) as exc:
+            raise GestureUnavailableError(f"could not launch gesture runtime: {exc}") from exc
+        self._process = process
+        message = self._read_message(timeout=10)
+        if message is None:
+            self.stop()
             raise GestureUnavailableError("gesture runtime timed out during startup")
-        message = parent.recv()
         if message[0] == "error":
-            process.join(timeout=2)
-            parent.close()
+            self.stop()
             raise GestureUnavailableError(message[2], failure=GestureFailure(message[1]))
-        self._process, self._stop_event, self._connection = process, stop_event, parent
+        if message[0] != "ready":
+            self.stop()
+            raise GestureUnavailableError("gesture runtime returned an invalid startup response")
         self._monitor = threading.Thread(target=self._monitor_worker, args=(callback,), daemon=True)
         self._monitor.start()
 
+    def _read_message(self, *, timeout: float | None = None) -> tuple[Any, ...] | None:
+        process = self._process
+        if process is None or process.stdout is None:
+            return None
+        if timeout is not None:
+            selector = selectors.DefaultSelector()
+            try:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                if not selector.select(timeout):
+                    return None
+            finally:
+                selector.close()
+        line = process.stdout.readline()
+        if not line:
+            return None
+        message = json.loads(line)
+        return tuple(message)
+
     def _monitor_worker(self, callback: Callable[[GestureIntent], None]) -> None:
-        connection = self._connection
-        if connection is None:
-            return
         try:
             while self._process is not None:
-                if not connection.poll(0.2):
-                    if self._process is not None and not self._process.is_alive():
-                        self._report_worker_failure(
-                            GestureUnavailableError("gesture worker exited unexpectedly")
-                        )
-                        return
-                    continue
-                message = connection.recv()
+                message = self._read_message()
+                if message is None:
+                    self._report_worker_failure(
+                        GestureUnavailableError("gesture worker exited unexpectedly")
+                    )
+                    return
                 if message[0] == "intent":
                     callback(GestureIntent(message[1]))
                 elif message[0] == "preview" and self._preview_callback is not None:
@@ -338,7 +350,7 @@ class OpenCVMediaPipeGestureAdapter:
                         )
                     )
                     return
-        except (EOFError, OSError):
+        except (json.JSONDecodeError, OSError, ValueError):
             if self._process is not None:
                 self._report_worker_failure(
                     GestureUnavailableError("gesture worker connection closed unexpectedly")
@@ -351,17 +363,21 @@ class OpenCVMediaPipeGestureAdapter:
 
     def stop(self) -> None:
         process, self._process = self._process, None
-        stop_event, self._stop_event = self._stop_event, None
-        if stop_event is not None:
-            stop_event.set()
         if process is not None:
-            process.join(timeout=2)
-            if process.is_alive():
+            if process.stdin is not None:
+                try:
+                    process.stdin.write("stop\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+                process.stdin.close()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
                 process.kill()
-                process.join(timeout=2)
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
+                process.wait(timeout=2)
+            if process.stdout is not None:
+                process.stdout.close()
         monitor, self._monitor = self._monitor, None
         if monitor is not None and monitor is not threading.current_thread():
             monitor.join(timeout=1)
