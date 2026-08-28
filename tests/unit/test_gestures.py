@@ -6,6 +6,7 @@ import pytest
 
 from terminal_ui.app import CompanionTerminal, InteractionMode
 from terminal_ui.gestures import (
+    GestureFailure,
     GestureIntent,
     GestureUnavailableError,
     Point,
@@ -89,7 +90,30 @@ def test_preview_rendering_downsamples_to_bounded_terminal_dimensions() -> None:
 
     rendered = render_frame(frame, width=3, height=2)
 
-    assert rendered.plain.splitlines() == ["▀▀▀", "▀▀▀"]
+    assert rendered.plain.splitlines() == ["▀▀▀"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (GestureFailure.MODEL_NOT_CONFIGURED, "models are not configured"),
+        (GestureFailure.MODEL_ASSET_MISSING, "model files are missing"),
+        (GestureFailure.DEPENDENCY_MISSING, "support is not installed"),
+        (GestureFailure.CAMERA_UNAVAILABLE, "Camera unavailable"),
+    ],
+)
+def test_gesture_startup_failures_have_specific_learner_messages(
+    failure: GestureFailure, message: str
+) -> None:
+    error = GestureUnavailableError("diagnostic detail", failure=failure)
+    assert message in error.learner_message
+
+
+def test_widescreen_preview_preserves_aspect_ratio() -> None:
+    frame = [[(0, 0, 0)] * 16 for _ in range(9)]
+    rendered = render_frame(frame, width=24, height=8)
+    assert len(rendered.plain.splitlines()) == 7
+    assert all(len(line) == 24 for line in rendered.plain.splitlines())
 
 
 @pytest.mark.asyncio

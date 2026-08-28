@@ -41,8 +41,18 @@ def configure_local(
     run: Callable[[], None],
 ) -> list[str]:
     events: list[str] = []
-    monkeypatch.setattr(cli, "get_settings", lambda: SimpleNamespace(core_url="http://test:4321"))
-    monkeypatch.setattr(multiprocessing, "Process", lambda **_kwargs: process)
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: SimpleNamespace(core_url="http://test:4321", core_log_path="/tmp/core.log"),
+    )
+
+    def make_process(**kwargs: Any) -> FakeProcess:
+        assert kwargs["target"] is cli._combined_core
+        assert kwargs["args"] == ("/tmp/core.log",)
+        return process
+
+    monkeypatch.setattr(multiprocessing, "Process", make_process)
 
     def wait_for_core(received_process: Any, health_url: str) -> None:
         assert received_process is process

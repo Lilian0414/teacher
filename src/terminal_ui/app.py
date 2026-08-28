@@ -199,7 +199,7 @@ class CompanionTerminal(App[None]):
         self._gestures_enabled = False
         self._gesture_status = "disabled"
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        self._preview_frames = LatestFrameBuffer(max_fps=5.0)
+        self._preview_frames = LatestFrameBuffer(max_fps=8.0)
         set_preview = getattr(self._gesture_adapter, "set_preview_callback", None)
         if callable(set_preview):
             set_preview(self._on_preview_frame)
@@ -224,7 +224,7 @@ class CompanionTerminal(App[None]):
         self._event_loop = asyncio.get_running_loop()
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
-        self.set_interval(0.2, self._refresh_camera_preview)
+        self.set_interval(0.125, self._refresh_camera_preview)
         self.set_interval(
             get_settings().proactive_poll_interval_seconds,
             self.check_proactive_invitation,
@@ -282,7 +282,7 @@ class CompanionTerminal(App[None]):
                 self._gesture_adapter.start(self._on_gesture_from_adapter)
             except GestureUnavailableError as exc:
                 self._gesture_status = "unavailable"
-                self._review_feedback.update("Camera unavailable · type or speak your answer")
+                self._review_feedback.update(f"{exc.learner_message} · type or speak your answer")
                 self._messages.write(
                     f"[system] Gestures unavailable: {exc}. "
                     "Typed and spoken review remain available."

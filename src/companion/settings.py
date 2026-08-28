@@ -11,6 +11,10 @@ def default_database_url() -> str:
     return f"sqlite:///{data_dir / 'companion.sqlite3'}"
 
 
+def default_log_dir() -> Path:
+    return Path.home() / "Library" / "Logs" / "ai-learning-companion"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -114,6 +118,11 @@ class Settings(BaseSettings):
     proactive_snooze_minutes: int = Field(default=30, ge=1)
     proactive_accept_cooldown_minutes: int = Field(default=60, ge=1)
     proactive_daily_limit: int = Field(default=3, ge=1, le=20)
+    pose_model: Path | None = None
+    gesture_model: Path | None = None
+    gesture_camera_index: int = Field(default=0, ge=0)
+    core_log_path: Path = Field(default_factory=lambda: default_log_dir() / "core.log")
+    gesture_log_path: Path = Field(default_factory=lambda: default_log_dir() / "gestures.log")
 
     @property
     def sqlite_path(self) -> Path | None:
