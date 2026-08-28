@@ -42,7 +42,7 @@ class LatestFrameBuffer:
             self._latest = None
 
 
-def render_frame(frame: Frame, *, width: int = 24, height: int = 8) -> Text:
+def render_frame(frame: Frame, *, width: int = 48, height: int = 12) -> Text:
     """Render within a cell box while preserving the source pixel aspect ratio."""
     if width < 1 or height < 1 or not frame or not frame[0]:
         return Text("")

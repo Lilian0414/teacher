@@ -15,6 +15,7 @@ from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Stat
 from companion.input_policy import ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.settings import get_settings
 from terminal_ui.gestures import (
+    PREVIEW_FPS,
     PREVIEW_INTERVAL_SECONDS,
     GestureAdapter,
     GestureIntent,
@@ -200,7 +201,7 @@ class CompanionTerminal(App[None]):
         self._gestures_enabled = False
         self._gesture_status = "disabled"
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        self._preview_frames = LatestFrameBuffer(max_fps=8.0)
+        self._preview_frames = LatestFrameBuffer(max_fps=PREVIEW_FPS)
         set_preview = getattr(self._gesture_adapter, "set_preview_callback", None)
         if callable(set_preview):
             set_preview(self._on_preview_frame)
@@ -317,7 +318,13 @@ class CompanionTerminal(App[None]):
             return
         frame = self._preview_frames.take_latest()
         if frame is not None:
-            self._camera_preview.update(render_frame(frame))
+            panel_width = self._practice_panel.size.width
+            panel_height = self._practice_panel.size.height
+            preview_width = max(1, panel_width - 4) if panel_width else 48
+            preview_height = max(1, panel_height - 10) if panel_height else 12
+            self._camera_preview.update(
+                render_frame(frame, width=preview_width, height=preview_height)
+            )
         self._camera_preview.display = True
 
     def _on_gesture_from_adapter(self, intent: GestureIntent) -> None:

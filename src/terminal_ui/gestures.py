@@ -41,7 +41,9 @@ _MESSAGES = {
     GestureFailure.RUNTIME_FAILED: "Gesture runtime unavailable",
 }
 
-PREVIEW_INTERVAL_SECONDS = 0.125
+PREVIEW_FPS = 12.0
+PREVIEW_INTERVAL_SECONDS = 1.0 / PREVIEW_FPS
+PREVIEW_PAYLOAD_WIDTH = 96
 
 
 class GestureUnavailableError(RuntimeError):
@@ -83,13 +85,14 @@ def classify_shrug(landmarks: Mapping[str, Point]) -> bool:
     shoulder_width = abs(rs.x - ls.x)
     if shoulder_width < 0.1:
         return False
+    wrist_height_tolerance = 0.65 * shoulder_width
     return (
-        abs(lw.y - ls.y) < 0.35 * shoulder_width
-        and abs(rw.y - rs.y) < 0.35 * shoulder_width
-        and le.y > lw.y
-        and re.y > rw.y
-        and lw.x < le.x < ls.x
-        and rw.x > re.x > rs.x
+        abs(lw.y - ls.y) <= wrist_height_tolerance
+        and abs(rw.y - rs.y) <= wrist_height_tolerance
+        and lw.x < ls.x
+        and rw.x > rs.x
+        and le.y > max(lw.y, ls.y)
+        and re.y > max(rw.y, rs.y)
     )
 
 
@@ -212,10 +215,10 @@ def _gesture_worker(
                 now = time.monotonic()
                 if now - last_preview >= PREVIEW_INTERVAL_SECONDS:
                     height, width = frame.shape[:2]
-                    preview_width = min(32, width)
+                    preview_width = min(PREVIEW_PAYLOAD_WIDTH, width)
                     preview_height = max(1, round(height * preview_width / width))
                     preview = cv2.resize(
-                        frame, (preview_width, preview_height), interpolation=cv2.INTER_AREA
+                        frame, (preview_width, preview_height), interpolation=cv2.INTER_NEAREST
                     )
                     preview = cv2.flip(preview, 1)  # Preview only; inference stays unmirrored.
                     rgb_preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB).tolist()

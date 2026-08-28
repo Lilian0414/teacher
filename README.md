@@ -425,9 +425,11 @@ a camera.
 Camera support is optional. Install the gesture extra (`pip install -e '.[gestures]'`),
 download compatible MediaPipe Pose Landmarker and Gesture Recognizer task models, copy
 `.env.example` to `.env`, and set `COMPANION_POSE_MODEL` and `COMPANION_GESTURE_MODEL`
-there to absolute local paths. No shell export is needed. Camera index `0` normally selects
-the built-in Mac camera; persist `COMPANION_GESTURE_CAMERA_INDEX=1` (or another tested
-AVFoundation index) in `.env` if Continuity Camera occupies it. On first use, allow the
+there to absolute local paths. No shell export is needed. Camera selection is an explicit
+AVFoundation index so automatic probing cannot wake Continuity Camera. Index `0` commonly
+selects the built-in camera, but on the target UAT Mac Continuity Camera occupies index `0`;
+persist `COMPANION_GESTURE_CAMERA_INDEX=1` in that Mac's `.env` to select its tested built-in
+camera (or use another index whose identity you have verified). On first use, allow the
 terminal camera permission in macOS System Settings. Missing packages,
 models, camera hardware, or permission leave typed and spoken review available. Frames,
 landmarks, and gesture history are processed ephemerally in memory and are never saved
