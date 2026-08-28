@@ -370,6 +370,7 @@ async def test_on_mount_uses_configured_proactive_poll_interval(
 
     assert scheduled == [
         (5, terminal.refresh_state),
+        (0.2, terminal._refresh_camera_preview),
         (expected_interval, terminal.check_proactive_invitation),
     ]
 

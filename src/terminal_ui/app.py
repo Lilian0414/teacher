@@ -20,6 +20,7 @@ from terminal_ui.gestures import (
     GestureUnavailableError,
     OpenCVMediaPipeGestureAdapter,
 )
+from terminal_ui.preview import Frame, LatestFrameBuffer, render_frame
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
 
@@ -65,6 +66,18 @@ class CompanionTerminal(App[None]):
         dock: bottom;
     }
     #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
+    #workspace { height: 1fr; }
+    #messages { width: 2fr; }
+    #practice-panel {
+        width: 1fr;
+        min-width: 30;
+        border: round $accent;
+        padding: 0 1;
+        display: none;
+    }
+    #practice-title { text-style: bold; color: $accent; }
+    #camera-preview { height: auto; display: none; }
+    #review-feedback { height: auto; color: $warning; }
     #onboarding { height: auto; border: round $success; padding: 0 1; display: none; }
     #onboarding Select { width: 1fr; margin-right: 1; }
     #onboarding-actions { height: 3; }
@@ -100,10 +113,7 @@ class CompanionTerminal(App[None]):
             timeout=40.0,
             trust_env=False,
         )
-        self._status = Static(
-            "Core: unknown | Availability: unknown | Remaining: - | LLM: unknown",
-            id="status",
-        )
+        self._status = Static("Teacher is getting ready…", id="status")
         self._messages = RichLog(id="messages", wrap=True, markup=False)
         self._input = Input(
             placeholder="Say something...",
@@ -115,6 +125,19 @@ class CompanionTerminal(App[None]):
             Button(id="action-3"),
         ]
         self._invitation = Static("", id="invitation")
+        self._practice_title = Static("Practice", id="practice-title")
+        self._practice_prompt = Static("", id="practice-prompt")
+        self._review_feedback = Static("", id="review-feedback")
+        self._camera_preview = Static("", id="camera-preview")
+        self._review_hint_button = Button("Show hint", id="review-hint")
+        self._practice_panel = Vertical(
+            self._practice_title,
+            self._practice_prompt,
+            self._review_feedback,
+            self._camera_preview,
+            self._review_hint_button,
+            id="practice-panel",
+        )
         self._invitation_buttons = [
             Button("Start", id="invitation-start", variant="success"),
             Button("Later", id="invitation-later"),
@@ -176,12 +199,18 @@ class CompanionTerminal(App[None]):
         self._gestures_enabled = False
         self._gesture_status = "disabled"
         self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._preview_frames = LatestFrameBuffer(max_fps=5.0)
+        set_preview = getattr(self._gesture_adapter, "set_preview_callback", None)
+        if callable(set_preview):
+            set_preview(self._on_preview_frame)
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
             yield self._status
-            yield self._messages
+            with Horizontal(id="workspace"):
+                yield self._messages
+                yield self._practice_panel
             yield self._onboarding
             yield self._invitation
             with Horizontal(id="invitation-actions"):
@@ -195,6 +224,7 @@ class CompanionTerminal(App[None]):
         self._event_loop = asyncio.get_running_loop()
         self._refresh_action_buttons()
         self.set_interval(5, self.refresh_state)
+        self.set_interval(0.2, self._refresh_camera_preview)
         self.set_interval(
             get_settings().proactive_poll_interval_seconds,
             self.check_proactive_invitation,
@@ -244,12 +274,15 @@ class CompanionTerminal(App[None]):
             self._gesture_adapter.stop()
             self._gestures_enabled = False
             self._gesture_status = "disabled"
+            self._preview_frames.clear()
+            self._camera_preview.display = False
             self._messages.write("[system] Gestures disabled.")
         else:
             try:
                 self._gesture_adapter.start(self._on_gesture_from_adapter)
             except GestureUnavailableError as exc:
                 self._gesture_status = "unavailable"
+                self._review_feedback.update("Camera unavailable · type or speak your answer")
                 self._messages.write(
                     f"[system] Gestures unavailable: {exc}. "
                     "Typed and spoken review remain available."
@@ -261,6 +294,27 @@ class CompanionTerminal(App[None]):
                     "[system] Gestures active (local camera only; nothing is saved or uploaded)."
                 )
         self._refresh_action_buttons()
+        self._refresh_practice_panel()
+
+    def _on_preview_frame(self, frame: Frame) -> None:
+        self._preview_frames.publish(frame)
+
+    def _refresh_camera_preview(self) -> None:
+        if not self._gestures_enabled or self._mode not in (
+            InteractionMode.REVIEW,
+            InteractionMode.REVIEW_COMPLETE,
+        ):
+            self._camera_preview.display = False
+            self._preview_frames.clear()
+            return
+        if self.size.width < 90:
+            self._camera_preview.display = False
+            self._preview_frames.clear()
+            return
+        frame = self._preview_frames.take_latest()
+        if frame is not None:
+            self._camera_preview.update(render_frame(frame))
+        self._camera_preview.display = True
 
     def _on_gesture_from_adapter(self, intent: GestureIntent) -> None:
         loop = self._event_loop
@@ -269,16 +323,21 @@ class CompanionTerminal(App[None]):
 
     async def handle_gesture(self, intent: GestureIntent) -> None:
         if intent == GestureIntent.UNCERTAINTY and self._mode == InteractionMode.REVIEW:
+            self._review_feedback.update("Uncertainty detected → showing hint")
             item_id = self._active_review_item_id
             if item_id is not None:
                 await self._run_guarded(lambda: self._show_review_hint(item_id))
         elif intent == GestureIntent.THUMBS_UP and self._mode == InteractionMode.REVIEW_COMPLETE:
+            self._review_feedback.update("Thumbs-up detected")
             await self.action_finish_review()
 
     async def _show_review_hint(self, item_id: str) -> None:
         response = await self._client.post(f"/v1/review/{item_id}/hint")
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
+        hints = result.get("hints")
+        if isinstance(hints, list):
+            self._review_feedback.update("Hint: " + " · ".join(str(hint) for hint in hints))
         self._messages.write(self._format_command_result(result))
 
     async def action_finish_review(self) -> None:
@@ -321,6 +380,7 @@ class CompanionTerminal(App[None]):
             self._messages.write(f"[system] {exc} You can still type your answer.")
             return
         self._recording = True
+        self._refresh_practice_panel()
         self._messages.write(
             "[system] Recording… press Ctrl+M to stop & submit or Ctrl+X to cancel."
         )
@@ -340,6 +400,7 @@ class CompanionTerminal(App[None]):
         self._cancel_recording_timeout()
         await self._recorder.cancel()
         self._refresh_action_buttons()
+        self._refresh_practice_panel()
         self._messages.write("[system] Recording cancelled. You can still type your answer.")
 
     def _cancel_recording_timeout(self) -> None:
@@ -408,6 +469,11 @@ class CompanionTerminal(App[None]):
             self._messages.write("Cancelled.")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "review-hint":
+            item_id = self._active_review_item_id
+            if not self._waiting and self._mode == InteractionMode.REVIEW and item_id is not None:
+                await self._run_guarded(lambda: self._show_review_hint(item_id))
+            return
         action_name = self._button_actions.get(event.button.id or "")
         if action_name == "stop_recording":
             await self.action_stop_recording()
@@ -488,6 +554,11 @@ class CompanionTerminal(App[None]):
         self._focus_input()
 
     def _reset_to_normal(self) -> None:
+        if self._gestures_enabled:
+            self._gesture_adapter.stop()
+            self._gestures_enabled = False
+            self._gesture_status = "disabled"
+            self._preview_frames.clear()
         self._mode = InteractionMode.NORMAL
         self._active_review_item_id = None
         self._active_review_prompt = None
@@ -515,6 +586,7 @@ class CompanionTerminal(App[None]):
 
     def _after_mode_change(self) -> None:
         self._refresh_action_buttons()
+        self._refresh_practice_panel()
         if self.is_running:
             self.refresh_bindings()
 
@@ -536,6 +608,30 @@ class CompanionTerminal(App[None]):
             if button.id is not None:
                 actions[button.id] = action_name
         self._button_actions = actions
+
+    def _refresh_practice_panel(self) -> None:
+        visible = self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE)
+        self._practice_panel.display = visible
+        if not visible:
+            self._camera_preview.display = False
+            return
+        if self._mode == InteractionMode.REVIEW_COMPLETE:
+            self._practice_title.update("Review complete ✓")
+            self._practice_prompt.update("Great work! Press Finish or give a thumbs-up.")
+            self._review_hint_button.display = False
+        else:
+            self._review_hint_button.display = True
+            self._practice_title.update(
+                f"Review · {self._active_review_position} / {self._active_review_total}"
+            )
+            prompt = self._active_review_prompt or "Answer the question shown in the conversation."
+            self._practice_prompt.update(prompt)
+        if self._recording:
+            self._review_feedback.update("● Recording · Stop & submit or Cancel")
+        elif self._gesture_status == "active":
+            self._review_feedback.update("Gesture ready · camera stays on this device")
+        elif self._gesture_status == "disabled":
+            self._review_feedback.update("Gesture off · type or speak your answer")
 
     def _mode_button_specs(self) -> list[tuple[str, str] | None]:
         if self._mode == InteractionMode.HELP_RESULT:
@@ -860,6 +956,7 @@ class CompanionTerminal(App[None]):
                     str(question["id"]),
                     position=int(question.get("position", 1)),
                     total=int(question.get("total", 1)),
+                    prompt=str(question.get("prompt", "")) or None,
                 )
             else:
                 self._reset_to_normal()
@@ -1053,7 +1150,7 @@ class CompanionTerminal(App[None]):
             self._update_status(payload)
             return payload
         except (httpx.HTTPError, ValueError):
-            self._status.update("Core: offline | Availability: unknown | Remaining: -")
+            self._status.update("Teacher is unavailable · you can keep typing while it reconnects")
             return None
 
     async def _fetch_proactive_status(self) -> dict[str, Any] | None:
@@ -1170,30 +1267,14 @@ class CompanionTerminal(App[None]):
             remaining = payload.get("remaining_seconds")
             expires_at = payload.get("override_expires_at")
             llm = payload.get("llm")
-        remaining_text = "-" if remaining is None else f"{remaining}s"
-        if availability == "dnd" and expires_at is None:
-            remaining_text = "until cleared"
-        llm_text = "unknown"
-        if isinstance(llm, dict):
-            provider = llm.get("provider", "unknown")
-            model = llm.get("model") or "-"
-            status = llm.get("status", "unknown")
-            llm_text = f"{provider}/{model}/{status}"
+        del remaining, expires_at, llm
         due_review_count = payload.get("due_review_count")
         if due_review_count is not None:
             self._due_review_count = int(due_review_count)
-        proactive = payload.get("proactive")
-        proactive_text = (
-            f" | {self._format_proactive_status(proactive)}" if isinstance(proactive, dict) else ""
+        readiness = (
+            "Ready" if availability == "available" else availability.replace("_", " ").title()
         )
-        self._status.update(
-            "Core: online"
-            f" | Availability: {availability.upper()}"
-            f" | Remaining: {remaining_text}"
-            f" | LLM: {llm_text}"
-            f" | {self._review_indicator(self._due_review_count)}"
-            f"{proactive_text}"
-        )
+        self._status.update(f"{readiness} · {self._review_indicator(self._due_review_count)}")
 
     @staticmethod
     def _review_indicator(count: int) -> str:

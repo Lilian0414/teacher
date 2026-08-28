@@ -13,6 +13,7 @@ from terminal_ui.gestures import (
     classify_shrug,
     classify_thumb_up,
 )
+from terminal_ui.preview import LatestFrameBuffer, render_frame
 from tests.unit.test_terminal_ui import MessageSink
 
 
@@ -65,6 +66,30 @@ def test_stability_noise_hold_release_and_cooldown() -> None:
     assert gate.observe(GestureIntent.THUMBS_UP, now=2.6) is None
     assert gate.observe(GestureIntent.THUMBS_UP, now=2.7) is None
     assert gate.observe(GestureIntent.THUMBS_UP, now=2.8) == GestureIntent.THUMBS_UP
+
+
+def test_preview_buffer_is_latest_only_and_throttled() -> None:
+    frames = LatestFrameBuffer(max_fps=5)
+    first = [[(1, 2, 3)]]
+    second = [[(4, 5, 6)]]
+    latest = [[(7, 8, 9)]]
+
+    assert frames.publish(first, now=0)
+    assert not frames.publish(second, now=0.1)
+    assert frames.publish(latest, now=0.2)
+    assert frames.take_latest() is latest
+    assert frames.take_latest() is None
+
+
+def test_preview_rendering_downsamples_to_bounded_terminal_dimensions() -> None:
+    frame = [
+        [(255, 0, 0), (0, 255, 0)],
+        [(0, 0, 255), (255, 255, 255)],
+    ]
+
+    rendered = render_frame(frame, width=3, height=2)
+
+    assert rendered.plain.splitlines() == ["▀▀▀", "▀▀▀"]
 
 
 @pytest.mark.asyncio
