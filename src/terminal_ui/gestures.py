@@ -10,8 +10,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -41,9 +40,12 @@ _MESSAGES = {
     GestureFailure.RUNTIME_FAILED: "Gesture runtime unavailable",
 }
 
-PREVIEW_FPS = 12.0
-PREVIEW_INTERVAL_SECONDS = 1.0 / PREVIEW_FPS
-PREVIEW_PAYLOAD_WIDTH = 96
+PREVIEW_TARGET_FPS = 18.0
+# Compatibility name consumed by the current Textual UI.
+PREVIEW_FPS = PREVIEW_TARGET_FPS
+PREVIEW_INTERVAL_SECONDS = 1.0 / PREVIEW_TARGET_FPS
+PREVIEW_PAYLOAD_WIDTH = 128
+INFERENCE_INTERVAL_SECONDS = 0.1
 
 
 class GestureUnavailableError(RuntimeError):
@@ -61,43 +63,17 @@ class GestureAdapter(Protocol):
     def stop(self) -> None: ...
 
 
-@dataclass(frozen=True)
-class Point:
-    x: float
-    y: float
-    visibility: float = 1.0
-
-
-def classify_shrug(landmarks: Mapping[str, Point]) -> bool:
-    required = (
-        "left_shoulder",
-        "right_shoulder",
-        "left_elbow",
-        "right_elbow",
-        "left_wrist",
-        "right_wrist",
-    )
-    if any(name not in landmarks or landmarks[name].visibility < 0.6 for name in required):
-        return False
-    ls, rs = landmarks["left_shoulder"], landmarks["right_shoulder"]
-    le, re = landmarks["left_elbow"], landmarks["right_elbow"]
-    lw, rw = landmarks["left_wrist"], landmarks["right_wrist"]
-    shoulder_width = abs(rs.x - ls.x)
-    if shoulder_width < 0.1:
-        return False
-    wrist_height_tolerance = 0.65 * shoulder_width
-    return (
-        abs(lw.y - ls.y) <= wrist_height_tolerance
-        and abs(rw.y - rs.y) <= wrist_height_tolerance
-        and lw.x < ls.x
-        and rw.x > rs.x
-        and le.y > max(lw.y, ls.y)
-        and re.y > max(rw.y, rs.y)
-    )
-
-
-def classify_thumb_up(categories: Sequence[tuple[str, float]], *, threshold: float = 0.7) -> bool:
-    return any(name == "Thumb_Up" and score >= threshold for name, score in categories)
+def classify_gesture(
+    categories: Sequence[tuple[str, float]], *, threshold: float = 0.7
+) -> GestureIntent | None:
+    for name, score in categories:
+        if score < threshold:
+            continue
+        if name == "Thumb_Up":
+            return GestureIntent.THUMBS_UP
+        if name == "Thumb_Down":
+            return GestureIntent.UNCERTAINTY
+    return None
 
 
 class StableGestureGate:
@@ -139,33 +115,17 @@ def _redirect_native_output(log_path: str) -> None:
         os.close(descriptor)
 
 
-def _classify_results(pose_result: Any, hand_result: Any) -> GestureIntent | None:
+def _classify_results(hand_result: Any) -> GestureIntent | None:
     for gestures in getattr(hand_result, "gestures", ()):
-        if classify_thumb_up([(item.category_name, float(item.score)) for item in gestures]):
-            return GestureIntent.THUMBS_UP
-    poses = getattr(pose_result, "pose_landmarks", ())
-    if poses:
-        names = {
-            11: "left_shoulder",
-            12: "right_shoulder",
-            13: "left_elbow",
-            14: "right_elbow",
-            15: "left_wrist",
-            16: "right_wrist",
-        }
-        points = {
-            name: Point(poses[0][i].x, poses[0][i].y, poses[0][i].visibility)
-            for i, name in names.items()
-        }
-        if classify_shrug(points):
-            return GestureIntent.UNCERTAINTY
+        intent = classify_gesture([(item.category_name, float(item.score)) for item in gestures])
+        if intent is not None:
+            return intent
     return None
 
 
 def _gesture_worker(
     send: Callable[[tuple[Any, ...]], None],
     should_stop: Callable[[], bool],
-    pose_model: str,
     gesture_model: str,
     camera_index: int,
     log_path: str,
@@ -191,16 +151,13 @@ def _gesture_worker(
             )
             return
         base, vision = mp.tasks.BaseOptions, mp.tasks.vision
-        pose = vision.PoseLandmarker.create_from_options(
-            vision.PoseLandmarkerOptions(base_options=base(model_asset_path=pose_model))
-        )
         hands = vision.GestureRecognizer.create_from_options(
             vision.GestureRecognizerOptions(base_options=base(model_asset_path=gesture_model))
         )
         send(("ready",))
         gate = StableGestureGate()
         last_preview = last_inference = float("-inf")
-        with pose, hands:
+        with hands:
             while not should_stop():
                 ok, frame = capture.read()
                 if not ok:
@@ -224,14 +181,12 @@ def _gesture_worker(
                     rgb_preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB).tolist()
                     send(("preview", rgb_preview))
                     last_preview = now
-                if now - last_inference < 0.1:
+                if now - last_inference < INFERENCE_INTERVAL_SECONDS:
                     continue
                 last_inference = now
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                emitted = gate.observe(
-                    _classify_results(pose.detect(image), hands.recognize(image))
-                )
+                emitted = gate.observe(_classify_results(hands.recognize(image)))
                 if emitted is not None:
                     send(("intent", emitted.value))
     except Exception as exc:
@@ -251,7 +206,9 @@ class OpenCVMediaPipeGestureAdapter:
         log_path: Path | None = None,
     ) -> None:
         settings = get_settings()
-        self._pose_model = pose_model or settings.pose_model
+        # Retained as a no-op constructor argument for callers configured before
+        # uncertainty moved from pose geometry to Gesture Recognizer's Thumb_Down.
+        _ = pose_model
         self._gesture_model = gesture_model or settings.gesture_model
         self._camera_index = settings.gesture_camera_index if camera_index is None else camera_index
         self._log_path = log_path or settings.gesture_log_path
@@ -271,12 +228,12 @@ class OpenCVMediaPipeGestureAdapter:
     def start(self, callback: Callable[[GestureIntent], None]) -> None:
         if self._process is not None:
             return
-        if self._pose_model is None or self._gesture_model is None:
+        if self._gesture_model is None:
             raise GestureUnavailableError(
                 "gesture model paths are not configured",
                 failure=GestureFailure.MODEL_NOT_CONFIGURED,
             )
-        if not self._pose_model.is_file() or not self._gesture_model.is_file():
+        if not self._gesture_model.is_file():
             raise GestureUnavailableError(
                 "configured gesture model assets were not found",
                 failure=GestureFailure.MODEL_ASSET_MISSING,
@@ -285,7 +242,6 @@ class OpenCVMediaPipeGestureAdapter:
             sys.executable,
             "-m",
             "terminal_ui.gesture_worker",
-            str(self._pose_model),
             str(self._gesture_model),
             str(self._camera_index),
             str(self._log_path),
@@ -348,9 +304,7 @@ class OpenCVMediaPipeGestureAdapter:
                     self._preview_callback(message[1])
                 elif message[0] == "error":
                     self._report_worker_failure(
-                        GestureUnavailableError(
-                            message[2], failure=GestureFailure(message[1])
-                        )
+                        GestureUnavailableError(message[2], failure=GestureFailure(message[1]))
                     )
                     return
         except (json.JSONDecodeError, OSError, ValueError):

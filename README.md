@@ -416,20 +416,18 @@ pytest
 ## Optional local review gestures (macOS)
 
 During a review question, **Gestures** (`Ctrl+K`) can enable two local-only camera
-interactions: a stable shrug shows the existing hint without submitting or grading an
+interactions: a stable thumbs-down shows the existing hint without submitting or grading an
 answer, and a stable thumbs-up dismisses the celebration shown after a correct final
 answer. A thumbs-up never grades an answer or changes learning state. Incorrect final
 answers skip the celebration. **Finish** (`Ctrl+F`) always exits the celebration without
 a camera.
 
 Camera support is optional. Install the gesture extra (`pip install -e '.[gestures]'`),
-download compatible MediaPipe Pose Landmarker and Gesture Recognizer task models, copy
-`.env.example` to `.env`, and set `COMPANION_POSE_MODEL` and `COMPANION_GESTURE_MODEL`
-there to absolute local paths. No shell export is needed. Camera selection is an explicit
-AVFoundation index so automatic probing cannot wake Continuity Camera. Index `0` commonly
-selects the built-in camera, but on the target UAT Mac Continuity Camera occupies index `0`;
-persist `COMPANION_GESTURE_CAMERA_INDEX=1` in that Mac's `.env` to select its tested built-in
-camera (or use another index whose identity you have verified). On first use, allow the
+download a compatible MediaPipe Gesture Recognizer task model, copy
+`.env.example` to `.env`, and set `COMPANION_GESTURE_MODEL`
+there to absolute local paths. No shell export is needed. Camera index `0` normally selects
+the built-in Mac camera; persist `COMPANION_GESTURE_CAMERA_INDEX=1` (or another tested
+AVFoundation index) in `.env` if Continuity Camera occupies it. On first use, allow the
 terminal camera permission in macOS System Settings. Missing packages,
 models, camera hardware, or permission leave typed and spoken review available. Frames,
 landmarks, and gesture history are processed ephemerally in memory and are never saved
@@ -440,6 +438,6 @@ The combined `companion` launcher writes Core diagnostics to
 `gestures.log` beside it. The `.env` log-path settings shown in `.env.example` override
 these locations. Standalone `companion-core` continues to print to its own terminal.
 
-Target-Mac UAT: verify `review -> enable Gestures -> shrug -> hint -> type/speak answer`,
+Target-Mac UAT: verify `review -> enable Gestures -> thumbs-down -> hint -> type/speak answer`,
 then complete a review correctly and verify both `thumbs-up -> finish` and the Finish
 button. Repeat with camera permission denied to verify both fallbacks.

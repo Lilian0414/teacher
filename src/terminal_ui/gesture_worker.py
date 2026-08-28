@@ -20,8 +20,8 @@ def _stop_requested() -> bool:
 
 
 def main() -> None:
-    if len(sys.argv) != 5:
-        raise SystemExit("expected pose model, gesture model, camera index, and log path")
+    if len(sys.argv) != 4:
+        raise SystemExit("expected gesture model, camera index, and log path")
     protocol_fd = os.dup(sys.stdout.fileno())
     protocol = os.fdopen(protocol_fd, "w", buffering=1)
 
@@ -30,7 +30,7 @@ def main() -> None:
         protocol.write("\n")
         protocol.flush()
 
-    _gesture_worker(send, _stop_requested, sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4])
+    _gesture_worker(send, _stop_requested, sys.argv[1], int(sys.argv[2]), sys.argv[3])
     protocol.close()
 
 

@@ -7,17 +7,16 @@ import pytest
 
 from terminal_ui.app import CompanionTerminal, InteractionMode
 from terminal_ui.gestures import (
-    PREVIEW_FPS,
+    INFERENCE_INTERVAL_SECONDS,
     PREVIEW_INTERVAL_SECONDS,
     PREVIEW_PAYLOAD_WIDTH,
+    PREVIEW_TARGET_FPS,
     GestureFailure,
     GestureIntent,
     GestureUnavailableError,
     OpenCVMediaPipeGestureAdapter,
-    Point,
     StableGestureGate,
-    classify_shrug,
-    classify_thumb_up,
+    classify_gesture,
 )
 from terminal_ui.preview import LatestFrameBuffer, render_frame
 from tests.unit.test_terminal_ui import MessageSink
@@ -44,36 +43,10 @@ class FakeGestureAdapter:
         self.stop_calls += 1
 
 
-def shrug_points() -> dict[str, Point]:
-    return {
-        "left_shoulder": Point(0.4, 0.4),
-        "right_shoulder": Point(0.6, 0.4),
-        "left_elbow": Point(0.3, 0.5),
-        "right_elbow": Point(0.7, 0.5),
-        "left_wrist": Point(0.2, 0.4),
-        "right_wrist": Point(0.8, 0.4),
-    }
-
-
-def test_deterministic_gesture_classifiers_cover_positive_and_negative() -> None:
-    assert classify_shrug(shrug_points())
-    obscured = shrug_points() | {"left_wrist": Point(0.2, 0.4, visibility=0.2)}
-    assert not classify_shrug(obscured)
-    assert classify_thumb_up([("Thumb_Up", 0.9)])
-    assert not classify_thumb_up([("Thumb_Up", 0.69), ("Open_Palm", 0.9)])
-
-
-def test_shrug_accepts_natural_bent_arm_geometry_without_exact_x_ordering() -> None:
-    natural_shrug = shrug_points() | {
-        "left_elbow": Point(0.43, 0.53),
-        "right_elbow": Point(0.57, 0.53),
-        "left_wrist": Point(0.34, 0.49),
-        "right_wrist": Point(0.66, 0.49),
-    }
-
-    assert classify_shrug(natural_shrug)
-    assert not classify_shrug(natural_shrug | {"left_wrist": Point(0.44, 0.49)})
-    assert not classify_shrug(natural_shrug | {"right_elbow": Point(0.57, 0.35)})
+def test_canned_gestures_map_to_review_intents_above_threshold() -> None:
+    assert classify_gesture([("Thumb_Down", 0.9)]) == GestureIntent.UNCERTAINTY
+    assert classify_gesture([("Thumb_Up", 0.9)]) == GestureIntent.THUMBS_UP
+    assert classify_gesture([("Thumb_Down", 0.69), ("Open_Palm", 0.9)]) is None
 
 
 def test_stability_noise_hold_release_and_cooldown() -> None:
@@ -106,10 +79,12 @@ def test_preview_buffer_is_latest_only_and_throttled() -> None:
     assert frames.take_latest() is None
 
 
-def test_preview_cadence_and_payload_target_are_bounded_at_twelve_fps() -> None:
-    assert PREVIEW_FPS == 12.0
-    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 12)
-    assert PREVIEW_PAYLOAD_WIDTH == 96
+def test_preview_cadence_and_payload_are_modestly_bounded() -> None:
+    assert PREVIEW_TARGET_FPS == 18.0
+    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 18)
+    assert PREVIEW_PAYLOAD_WIDTH == 128
+    assert INFERENCE_INTERVAL_SECONDS == 0.1
+    assert INFERENCE_INTERVAL_SECONDS != PREVIEW_INTERVAL_SECONDS
 
 
 def test_preview_rendering_downsamples_to_bounded_terminal_dimensions() -> None:
@@ -197,16 +172,8 @@ def test_widescreen_preview_preserves_aspect_ratio() -> None:
     assert all(len(line) == 24 for line in rendered.plain.splitlines())
 
 
-def test_preview_defaults_use_more_panel_space_without_overflowing_box() -> None:
-    frame = [[(0, 0, 0)] * 96 for _ in range(54)]
-    rendered = render_frame(frame)
-    lines = rendered.plain.splitlines()
-    assert len(lines) == 12
-    assert all(len(line) == 43 for line in lines)
-
-
 @pytest.mark.asyncio
-async def test_shrug_reuses_hint_without_answer_request_or_state_change() -> None:
+async def test_uncertainty_reuses_hint_without_answer_request_or_state_change() -> None:
     paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
