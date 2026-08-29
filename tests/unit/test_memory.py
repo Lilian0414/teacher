@@ -15,7 +15,12 @@ from companion.memory.schemas import (
 from companion.persistence.database import Base, make_engine
 from companion.persistence.models import Memory
 from companion.providers.embeddings import EmbeddingProvider
-from companion.providers.errors import LLMInvalidResponseError
+from companion.providers.errors import (
+    LLMConfigurationError,
+    LLMInvalidResponseError,
+    LLMProviderError,
+    LLMTemporaryError,
+)
 from companion.schemas.conversation import MessageRole
 from tests.support import RecordingLLMProvider
 
@@ -196,9 +201,42 @@ async def test_malformed_extraction_is_controlled_and_persists_no_memory() -> No
     result = await service.extract_conversation(conversation.id)
 
     assert result.error == "LLM returned invalid memory candidates"
+    assert result.retryable is False
     assert result.created == []
     assert result.updated == []
     assert repository.list_memories() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_error", "retryable"),
+    [
+        (LLMConfigurationError("GROQ_API_KEY is not configured"), False),
+        (LLMTemporaryError("provider temporarily unavailable"), True),
+    ],
+)
+async def test_extraction_preserves_provider_retry_classification(
+    provider_error: LLMProviderError,
+    retryable: bool,
+) -> None:
+    _, conversations, _, service, provider = make_memory_services()
+    now = datetime(2026, 7, 19, 12, tzinfo=UTC)
+    conversation = conversations.create_conversation(user_id="default", started_at=now)
+    conversations.add_message(
+        conversation_id=conversation.id,
+        role=MessageRole.USER,
+        content="Remember this fact.",
+        language="en",
+        source="terminal",
+        created_at=now,
+    )
+    provider.memory_extraction_error = provider_error
+
+    result = await service.extract_conversation(conversation.id)
+
+    assert result.retryable is retryable
+    assert conversation.memory_extraction_status == "failed"
+    assert conversation.memory_extraction_attempts == 1
 
 
 @pytest.mark.asyncio

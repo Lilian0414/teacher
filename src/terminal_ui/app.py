@@ -1279,11 +1279,18 @@ class CompanionTerminal(App[None]):
                 response.raise_for_status()
                 payload = response.json()
                 extraction = payload.get("memory_extraction")
-                if isinstance(extraction, dict) and extraction.get("retryable"):
-                    self._messages.write(
-                        "[system] Memory extraction failed. Quit again to retry safely."
-                    )
-                    return
+                if isinstance(extraction, dict) and extraction.get("error"):
+                    if extraction.get("retryable"):
+                        warning = (
+                            "[system] Conversation saved. Memory extraction was not completed; "
+                            "Teacher will retry recovery later."
+                        )
+                    else:
+                        warning = (
+                            "[system] Conversation saved, but memory extraction was not "
+                            "completed. Check the provider configuration before the next run."
+                        )
+                    self._messages.write(warning)
             except httpx.HTTPError as exc:
                 self._messages.write(f"[system] Could not end conversation; quit cancelled: {exc}")
                 return
