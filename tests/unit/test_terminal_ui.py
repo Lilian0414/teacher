@@ -12,7 +12,7 @@ from rich.markdown import Markdown
 from textual.widgets import Input, Static
 
 from companion.settings import get_settings
-from terminal_ui.app import CompanionTerminal, InteractionMode
+from terminal_ui.app import CompanionTerminal, InteractionMode, MessageRole
 from terminal_ui.gestures import PREVIEW_INTERVAL_SECONDS
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
@@ -520,7 +520,7 @@ async def test_onboarding_choices_defaults_and_skip(
     assert [(request.method, request.url.path) for request in requests] == [(method, path)]
     if action == "onboarding-save":
         assert requests[0].content == b'{"correction_style":"intensive","proactive_cadence":"rare"}'
-    assert expected_message in messages.values
+    assert expected_message in render(messages.values[-1])
     await terminal._client.aclose()
 
 
@@ -644,7 +644,9 @@ async def test_practice_chat_is_finalized_once_with_returned_message_ids() -> No
         },
     )
     assert terminal._active_practice_invitation_id is None
-    assert "Practice complete. This conversation was not graded." in terminal._messages.values
+    assert "Practice complete. This conversation was not graded." in render(
+        terminal._messages.values[-1]
+    )
     await terminal._client.aclose()
 
 
@@ -986,7 +988,7 @@ async def test_skip_practice_persists_abandonment_before_resetting_ui() -> None:
 
     assert terminal._mode == InteractionMode.NORMAL
     assert terminal._active_practice_invitation_id is None
-    assert "Practice skipped." in terminal._messages.values
+    assert "Practice skipped." in render(terminal._messages.values[-1])
     await terminal._client.aclose()
 
 
@@ -1362,7 +1364,7 @@ async def test_say_retry_conflict_shows_detail_and_clears_evidence() -> None:
 
     assert terminal._pending_assistant_retry is None
     messages = cast(MessageSink, terminal._messages).values
-    assert messages[-1] == "[system] The retry target is stale because newer activity exists."
+    assert "The retry target is stale because newer activity exists." in render(messages[-1])
     assert requests == [
         ("POST", "/v1/commands/execute"),
         (
@@ -2157,3 +2159,81 @@ def test_plain_user_and_system_writes_remain_literal() -> None:
         "You said: [red]hello[/red]",
         "[system] [red]hello[/red]",
     ]
+
+@pytest.mark.parametrize(
+    ("role", "cue", "style"),
+    [
+        (MessageRole.USER, "You:", "magenta"),
+        (MessageRole.ASSISTANT, "assistant:", "cyan"),
+        (MessageRole.NEUTRAL, "Status:", "cyan"),
+        (MessageRole.HINT, "Hint:", "yellow"),
+        (MessageRole.SUCCESS, "✓ Success:", "green"),
+        (MessageRole.INCORRECT, "✗ Try again:", "red"),
+        (MessageRole.ERROR, "Error:", "red"),
+    ],
+)
+def test_semantic_message_roles_keep_text_cues_and_colors(
+    role: MessageRole, cue: str, style: str
+) -> None:
+    terminal = make_terminal()
+
+    terminal._write_message("Example", role)
+
+    written = cast(MessageSink, terminal._messages).values[-1]
+    assert cue in render(written)
+    assert style in str(written.style)
+
+
+@pytest.mark.asyncio
+async def test_transcript_navigation_keeps_input_focus_and_end_returns_latest() -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=(80, 24)) as pilot:
+        for number in range(80):
+            terminal._write_message(f"history {number}")
+        await pilot.pause()
+        terminal._input.focus()
+        await pilot.press("pageup")
+        await pilot.pause()
+        assert terminal._messages.scroll_y < terminal._messages.max_scroll_y
+        assert terminal.focused is terminal._input
+
+        await pilot.press("pagedown")
+        await pilot.press("end")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == terminal._messages.max_scroll_y
+        assert terminal.focused is terminal._input
+        assert not terminal._new_messages.display
+
+
+@pytest.mark.asyncio
+async def test_transcript_new_output_follows_only_when_already_at_bottom() -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=(80, 24)) as pilot:
+        for number in range(80):
+            terminal._write_message(f"history {number}")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == terminal._messages.max_scroll_y
+
+        await pilot.press("pageup")
+        await pilot.pause()
+        history_position = terminal._messages.scroll_y
+        terminal._write_message("new while reading")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == history_position
+        assert terminal._new_messages.display
+
+        await pilot.press("end")
+        terminal._write_message("new at bottom")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == terminal._messages.max_scroll_y
+        assert not terminal._new_messages.display

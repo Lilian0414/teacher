@@ -318,6 +318,11 @@ companion-core
 companion-ui
 ```
 
+在 Textual UI 中，即使輸入框保持 focus，也可用 `Page Up` / `Page Down` 瀏覽對話，並用
+`End` 跳回最新訊息；支援的 terminal 也可使用滑鼠或 trackpad 捲動。Textual 無法改變 terminal
+emulator 的實體字體大小；需要放大時，macOS Terminal 或 iTerm2 可用 `⌘+` / `⌘-`（`⌘0`
+回到預設大小）。
+
 預設 SQLite database：
 
 ```text
