@@ -649,6 +649,134 @@ async def test_practice_chat_is_finalized_once_with_returned_message_ids() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    ["/review", "/help something", "/hint something", "/say something", "/preferences onboard"],
+)
+async def test_practice_prompt_rejects_mode_changing_commands_from_input(command: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"blocked command made a request: {request.url.path}")
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    await terminal.on_input_submitted(Input.Submitted(terminal._input, command))
+
+    assert_mode(terminal, InteractionMode.PRACTICE_PROMPT)
+    assert terminal._active_practice_invitation_id == "invite-1"
+    assert terminal._pending_assistant_retry is None
+    assert terminal._pending_practice_completion is None
+    assert "Finish your practice answer" in cast(MessageSink, terminal._messages).values[-1]
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_practice_prompt_allows_status_from_input_without_mutating_practice() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/v1/commands/execute":
+            return httpx.Response(200, json={"command": "status", "ok": True, "message": "ok"})
+        if request.url.path == "/v1/proactive/status":
+            return httpx.Response(200, json={"cadence": "normal", "reason": "accepted_practice"})
+        raise AssertionError(request.url.path)
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._active_practice_invitation_id = "invite-1"
+    terminal._mode = InteractionMode.PRACTICE_PROMPT
+
+    await terminal.on_input_submitted(Input.Submitted(terminal._input, "/status"))
+
+    assert requests == ["/v1/commands/execute", "/v1/proactive/status"]
+    assert_mode(terminal, InteractionMode.PRACTICE_PROMPT)
+    assert terminal._active_practice_invitation_id == "invite-1"
+    assert terminal._pending_assistant_retry is None
+    assert terminal._pending_practice_completion is None
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("submitted", "expected_route"),
+    [
+        ("/review", []),
+        ("/status", [("command", "/status")]),
+        ("My practice answer", [("chat", "My practice answer")]),
+    ],
+)
+async def test_practice_slash_command_routing_with_textual_pilot(
+    submitted: str, expected_route: list[tuple[str, str]]
+) -> None:
+    terminal = CompanionTerminal()
+    routed: list[tuple[str, str]] = []
+
+    async def skip_startup() -> None:
+        return None
+
+    async def record_command(raw: str) -> None:
+        routed.append(("command", raw))
+
+    async def record_chat(raw: str, *, echo_user: bool = False) -> None:
+        assert echo_user is False
+        routed.append(("chat", raw))
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    terminal._send_command = record_command  # type: ignore[method-assign]
+    terminal._send_chat_message = record_chat  # type: ignore[method-assign]
+
+    async with terminal.run_test() as pilot:
+        terminal._active_practice_invitation_id = "invite-1"
+        terminal._mode = InteractionMode.PRACTICE_PROMPT
+        terminal._after_mode_change()
+        terminal._input.focus()
+
+        await pilot.press(*submitted, "enter")
+
+        assert routed == expected_route
+        assert_mode(terminal, InteractionMode.PRACTICE_PROMPT)
+        assert terminal._active_practice_invitation_id == "invite-1"
+        assert terminal._pending_assistant_retry is None
+        assert terminal._pending_practice_completion is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("_active_practice_invitation_id", "invite-1"),
+        ("_pending_assistant_retry", {"conversation_id": "c-1", "user_message_id": "u-1"}),
+        (
+            "_pending_practice_completion",
+            {
+                "invitation_id": "invite-1",
+                "conversation_id": "c-1",
+                "user_message_id": "u-1",
+                "assistant_message_id": "a-1",
+            },
+        ),
+    ],
+)
+def test_practice_lifecycle_state_prevents_presenting_invitation(
+    field: str, value: object
+) -> None:
+    terminal = make_terminal()
+    setattr(terminal, field, value)
+
+    assert terminal._can_present_invitation() is False
+
+    asyncio.run(terminal._client.aclose())
+
+
+@pytest.mark.asyncio
 async def test_practice_partial_failure_retries_original_message_and_finalizes_once() -> None:
     requests: list[tuple[str, dict[str, Any] | None]] = []
 

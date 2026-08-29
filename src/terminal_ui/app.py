@@ -747,7 +747,15 @@ class CompanionTerminal(App[None]):
         if not raw:
             return
         self._messages.write(f"> {raw}")
-        if raw == "/preferences" or raw.startswith("/preferences "):
+        if self._mode == InteractionMode.PRACTICE_PROMPT and raw.startswith("/"):
+            if raw != "/status":
+                self._messages.write(
+                    "[system] Finish your practice answer or choose Skip practice before "
+                    "using commands. /status is still available."
+                )
+                return
+            await self._run_guarded(lambda: self._send_command(raw))
+        elif raw == "/preferences" or raw.startswith("/preferences "):
             await self._run_guarded(lambda: self._handle_preferences(raw))
         elif self._mode == InteractionMode.AWAITING_HELP_SENTENCE:
             await self._run_guarded(lambda: self._run_help_capture(raw))
@@ -847,6 +855,9 @@ class CompanionTerminal(App[None]):
             and self._mode == InteractionMode.NORMAL
             and self._active_review_item_id is None
             and self._pending_invitation is None
+            and self._active_practice_invitation_id is None
+            and self._pending_assistant_retry is None
+            and self._pending_practice_completion is None
         )
 
     async def check_proactive_invitation(self) -> None:
@@ -1155,8 +1166,7 @@ class CompanionTerminal(App[None]):
             self._messages.write("Practice complete. A useful learning point was saved for review.")
         else:
             self._messages.write("Practice complete. This conversation was not graded.")
-        self._pending_practice_completion = None
-        self._active_practice_invitation_id = None
+        self._clear_practice_state()
         self._reset_to_normal()
 
     async def _abandon_practice(self) -> None:
@@ -1170,9 +1180,19 @@ class CompanionTerminal(App[None]):
             f"/v1/proactive/invitations/{invitation_id}/practice/abandon"
         )
         response.raise_for_status()
-        self._active_practice_invitation_id = None
+        self._clear_practice_state()
         self._reset_to_normal()
         self._messages.write("Practice skipped.")
+
+    def _clear_practice_state(self) -> None:
+        """Clear local state associated with a terminal practice transition."""
+        self._active_practice_invitation_id = None
+        self._pending_practice_completion = None
+        if (
+            self._pending_assistant_retry is not None
+            and self._pending_assistant_retry.get("invitation_id") is not None
+        ):
+            self._pending_assistant_retry = None
 
     async def refresh_state(self) -> dict[str, Any] | None:
         try:
@@ -1267,7 +1287,6 @@ class CompanionTerminal(App[None]):
                     await self._abandon_practice()
                 if self._active_practice_invitation_id is not None:
                     raise ValueError("Practice did not reach a terminal state")
-                self._pending_assistant_retry = None
             except (httpx.HTTPError, ValueError) as exc:
                 self._messages.write(
                     f"[system] Could not resolve active practice; quit cancelled: {exc}"
