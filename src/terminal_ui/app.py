@@ -8,7 +8,9 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from rich.markdown import Markdown
+from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
@@ -44,6 +46,18 @@ class InteractionMode(StrEnum):
     REVIEW_COMPLETE = "review_complete"
 
 
+class MessageRole(StrEnum):
+    """Semantic transcript roles; labels keep meaning independent of color."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    NEUTRAL = "neutral"
+    HINT = "hint"
+    SUCCESS = "success"
+    INCORRECT = "incorrect"
+    ERROR = "error"
+
+
 class CompanionTerminal(App[None]):
     CSS = """
     Screen {
@@ -53,9 +67,24 @@ class CompanionTerminal(App[None]):
         height: 3;
         padding: 0 1;
     }
+    #transcript {
+        height: 1fr;
+        width: 2fr;
+    }
     #messages {
         height: 1fr;
+        width: 1fr;
         border: solid $primary;
+        padding: 0 1;
+        scrollbar-size-vertical: 1;
+    }
+    #new-messages {
+        height: 1;
+        min-height: 1;
+        width: 1fr;
+        display: none;
+        color: $accent;
+        text-style: bold;
     }
     #actions {
         height: 3;
@@ -69,7 +98,6 @@ class CompanionTerminal(App[None]):
     }
     #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
     #workspace { height: 1fr; }
-    #messages { width: 2fr; }
     #practice-panel {
         width: 1fr;
         min-width: 30;
@@ -79,6 +107,12 @@ class CompanionTerminal(App[None]):
     }
     #practice-title { text-style: bold; color: $accent; }
     #camera-preview { height: auto; display: none; }
+    #gesture-feedback {
+        height: 3;
+        content-align: center middle;
+        text-style: bold;
+        display: none;
+    }
     #review-feedback { height: auto; color: $warning; }
     #onboarding { height: auto; border: round $success; padding: 0 1; display: none; }
     #onboarding Select { width: 1fr; margin-right: 1; }
@@ -97,6 +131,9 @@ class CompanionTerminal(App[None]):
         ("ctrl+u", "use_suggestion", "Use this"),
         ("ctrl+k", "toggle_gestures", "Gestures"),
         ("ctrl+f", "finish_review", "Finish"),
+        Binding("pageup", "transcript_page_up", "History ↑", priority=True),
+        Binding("pagedown", "transcript_page_down", "History ↓", priority=True),
+        Binding("end", "transcript_latest", "Latest", priority=True),
         ("escape", "cancel_intent", "Try myself"),
     ]
 
@@ -116,7 +153,8 @@ class CompanionTerminal(App[None]):
             trust_env=False,
         )
         self._status = Static("Teacher is getting ready…", id="status")
-        self._messages = RichLog(id="messages", wrap=True, markup=False)
+        self._messages = RichLog(id="messages", wrap=True, markup=False, auto_scroll=False)
+        self._new_messages = Static("↓ New messages — End: jump to latest", id="new-messages")
         self._input = Input(
             placeholder="Say something...",
             id="command",
@@ -131,11 +169,13 @@ class CompanionTerminal(App[None]):
         self._practice_prompt = Static("", id="practice-prompt")
         self._review_feedback = Static("", id="review-feedback")
         self._camera_preview = Static("", id="camera-preview")
+        self._gesture_feedback = Static("", id="gesture-feedback")
         self._review_hint_button = Button("Show hint", id="review-hint")
         self._practice_panel = Vertical(
             self._practice_title,
             self._practice_prompt,
             self._review_feedback,
+            self._gesture_feedback,
             self._camera_preview,
             self._review_hint_button,
             id="practice-panel",
@@ -202,6 +242,7 @@ class CompanionTerminal(App[None]):
         self._gesture_status = "disabled"
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._preview_frames = LatestFrameBuffer(max_fps=PREVIEW_FPS)
+        self._gesture_feedback_timer: Any | None = None
         set_preview = getattr(self._gesture_adapter, "set_preview_callback", None)
         if callable(set_preview):
             set_preview(self._on_preview_frame)
@@ -214,7 +255,9 @@ class CompanionTerminal(App[None]):
         with Vertical():
             yield self._status
             with Horizontal(id="workspace"):
-                yield self._messages
+                with Vertical(id="transcript"):
+                    yield self._messages
+                    yield self._new_messages
                 yield self._practice_panel
             yield self._onboarding
             yield self._invitation
@@ -238,11 +281,112 @@ class CompanionTerminal(App[None]):
         state = await self.refresh_state()
         await self._show_onboarding_if_needed()
         await self.ensure_conversation()
-        self._messages.write(self._startup_message(state))
+        self._write_message(self._startup_message(state))
 
     async def on_unmount(self) -> None:
         self._gesture_adapter.stop()
+        if self._gesture_feedback_timer is not None:
+            self._gesture_feedback_timer.cancel()
         await self._client.aclose()
+
+    def _transcript_at_bottom(self) -> bool:
+        """Return whether transcript output should continue following new content."""
+        if not self.is_running:
+            return True
+        return self._messages.scroll_y >= self._messages.max_scroll_y
+
+    def _write_message(
+        self,
+        content: str,
+        role: MessageRole | None = None,
+        *,
+        markdown: bool = False,
+    ) -> None:
+        """Write through the single semantic rendering and follow-policy path."""
+        was_at_bottom = self._transcript_at_bottom()
+        if role is None:
+            role = self._message_role(content)
+        labels = {
+            MessageRole.USER: ("You", "bold magenta"),
+            MessageRole.ASSISTANT: ("assistant", "bold cyan"),
+            MessageRole.NEUTRAL: ("Status", "dim cyan"),
+            MessageRole.HINT: ("Hint", "bold yellow"),
+            MessageRole.SUCCESS: ("✓ Success", "bold green"),
+            MessageRole.INCORRECT: ("✗ Try again", "bold red"),
+            MessageRole.ERROR: ("Error", "bold red"),
+        }
+        label, style = labels[role]
+        if markdown:
+            rendered: Text | Markdown = Markdown(f"**{label}:** {content}", style=style)
+        else:
+            rendered = Text(f"{label}: {content}", style=style)
+        self._messages.write(rendered)
+        if not self.is_running:
+            return
+        if was_at_bottom:
+            self.call_after_refresh(self.action_transcript_latest)
+        else:
+            self._new_messages.display = True
+
+    @staticmethod
+    def _message_role(content: str) -> MessageRole:
+        """Classify legacy handler output without allowing handlers to choose colors."""
+        lowered = content.casefold()
+        if content.startswith(">") or content.startswith("You said:"):
+            return MessageRole.USER
+        if "hint" in lowered or "couldn't grade" in lowered or "deferred" in lowered:
+            return MessageRole.HINT
+        if any(
+            cue in lowered
+            for cue in ("failed", "error", "could not", "unavailable:", "quit cancelled")
+        ):
+            return MessageRole.ERROR
+        if lowered.startswith("correct") or any(
+            cue in lowered for cue in ("complete.", "completed", "great work", "saved")
+        ):
+            return MessageRole.SUCCESS
+        if lowered.startswith("incorrect") or "try again" in lowered:
+            return MessageRole.INCORRECT
+        return MessageRole.NEUTRAL
+
+    def action_transcript_page_up(self) -> None:
+        self._messages.scroll_page_up(animate=False)
+        self._new_messages.display = True
+        self._focus_input()
+
+    def action_transcript_page_down(self) -> None:
+        self._messages.scroll_page_down(animate=False)
+        self.call_after_refresh(self._update_latest_affordance)
+        self._focus_input()
+
+    def action_transcript_latest(self) -> None:
+        self._messages.scroll_end(animate=False, force=True, immediate=True)
+        self._new_messages.display = False
+        self._focus_input()
+
+    def _update_latest_affordance(self) -> None:
+        self._new_messages.display = not self._transcript_at_bottom()
+
+    def _show_gesture_feedback(self, intent: GestureIntent) -> None:
+        """Coalesce held gestures into one prompt, without changing focus."""
+        if self._gesture_feedback_timer is not None:
+            self._gesture_feedback_timer.cancel()
+        if intent == GestureIntent.THUMBS_UP:
+            self._gesture_feedback.update(Text("👍", style="bold green", justify="center"))
+        else:
+            self._gesture_feedback.update(Text("👎", style="bold yellow", justify="center"))
+        self._gesture_feedback.display = True
+        if self.is_running:
+            self._gesture_feedback_timer = asyncio.create_task(self._dismiss_gesture_feedback())
+
+    async def _dismiss_gesture_feedback(self) -> None:
+        await asyncio.sleep(0.9)
+        self._clear_gesture_feedback()
+
+    def _clear_gesture_feedback(self) -> None:
+        self._gesture_feedback.display = False
+        self._gesture_feedback.update("")
+        self._gesture_feedback_timer = None
 
     # ------------------------------------------------------------------
     # Primary intents (Help me say it / Give me a hint / Review) and the
@@ -281,21 +425,21 @@ class CompanionTerminal(App[None]):
             self._gesture_status = "disabled"
             self._preview_frames.clear()
             self._camera_preview.display = False
-            self._messages.write("[system] Gestures disabled.")
+            self._write_message("[system] Gestures disabled.")
         else:
             try:
                 self._gesture_adapter.start(self._on_gesture_from_adapter)
             except GestureUnavailableError as exc:
                 self._gesture_status = "unavailable"
                 self._review_feedback.update(f"{exc.learner_message} · type or speak your answer")
-                self._messages.write(
+                self._write_message(
                     f"[system] Gestures unavailable: {exc}. "
                     "Typed and spoken review remain available."
                 )
             else:
                 self._gestures_enabled = True
                 self._gesture_status = "active"
-                self._messages.write(
+                self._write_message(
                     "[system] Gestures active (local camera only; nothing is saved or uploaded)."
                 )
         self._refresh_action_buttons()
@@ -343,7 +487,7 @@ class CompanionTerminal(App[None]):
         self._preview_frames.clear()
         self._camera_preview.display = False
         self._review_feedback.update(f"{error.learner_message} · type or speak your answer")
-        self._messages.write(
+        self._write_message(
             f"[system] Gestures unavailable: {error}. "
             "Typed and spoken review remain available."
         )
@@ -351,6 +495,8 @@ class CompanionTerminal(App[None]):
         self._refresh_practice_panel()
 
     async def handle_gesture(self, intent: GestureIntent) -> None:
+        if intent in (GestureIntent.UNCERTAINTY, GestureIntent.THUMBS_UP):
+            self._show_gesture_feedback(intent)
         if intent == GestureIntent.UNCERTAINTY and self._mode == InteractionMode.REVIEW:
             self._review_feedback.update("Uncertainty detected → showing hint")
             item_id = self._active_review_item_id
@@ -367,12 +513,12 @@ class CompanionTerminal(App[None]):
         hints = result.get("hints")
         if isinstance(hints, list):
             self._review_feedback.update("Hint: " + " · ".join(str(hint) for hint in hints))
-        self._messages.write(self._format_command_result(result))
+        self._write_message(self._format_command_result(result))
 
     async def action_finish_review(self) -> None:
         if self._mode != InteractionMode.REVIEW_COMPLETE:
             return
-        self._messages.write("Review finished. Great work!")
+        self._write_message("Review finished. Great work!", MessageRole.SUCCESS)
         self._reset_to_normal()
 
     async def action_help_intent(self) -> None:
@@ -406,11 +552,13 @@ class CompanionTerminal(App[None]):
         try:
             await self._recorder.start()
         except MicrophoneUnavailableError as exc:
-            self._messages.write(f"[system] {exc} You can still type your answer.")
+            self._write_message(
+                f"[system] {exc} You can still type your answer.", MessageRole.ERROR
+            )
             return
         self._recording = True
         self._refresh_practice_panel()
-        self._messages.write(
+        self._write_message(
             "[system] Recording… press Ctrl+M to stop & submit or Ctrl+X to cancel."
         )
         self._recording_timeout_task = asyncio.create_task(self._recording_safety_timeout())
@@ -419,7 +567,7 @@ class CompanionTerminal(App[None]):
     async def _recording_safety_timeout(self) -> None:
         await asyncio.sleep(self._recording_limit_seconds)
         if self._recording:
-            self._messages.write("[system] Recording safety limit reached; submitting audio.")
+            self._write_message("[system] Recording safety limit reached; submitting audio.")
             await self._run_guarded(lambda: self._stop_and_submit_recording(from_timeout=True))
 
     async def action_stop_recording(self) -> None:
@@ -430,7 +578,7 @@ class CompanionTerminal(App[None]):
         await self._recorder.cancel()
         self._refresh_action_buttons()
         self._refresh_practice_panel()
-        self._messages.write("[system] Recording cancelled. You can still type your answer.")
+        self._write_message("[system] Recording cancelled. You can still type your answer.")
 
     def _cancel_recording_timeout(self) -> None:
         task = self._recording_timeout_task
@@ -463,7 +611,7 @@ class CompanionTerminal(App[None]):
         transcript = str(response.json().get("transcript", "")).strip()
         if not transcript:
             raise ValueError("Transcription was empty; please retry or type your answer.")
-        self._messages.write(f"> 🎤 {transcript}")
+        self._write_message(f"> 🎤 {transcript}")
         await self._submit_review_answer(transcript)
 
     async def action_retry_assistant(self) -> None:
@@ -495,9 +643,9 @@ class CompanionTerminal(App[None]):
         was_help_result = self._mode == InteractionMode.HELP_RESULT
         self._reset_to_normal()
         if was_help_result:
-            self._messages.write("Okay, try it yourself.")
+            self._write_message("Okay, try it yourself.")
         else:
-            self._messages.write("Cancelled.")
+            self._write_message("Cancelled.")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "review-hint":
@@ -541,14 +689,16 @@ class CompanionTerminal(App[None]):
         if content is None:
             return
         result = await self._post_command(f"/hint {content}")
-        self._messages.write(self._format_command_result(result))
+        role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
+        self._write_message(self._format_command_result(result), role)
         self._reset_to_normal()
 
     async def _run_help_capture(self, raw: str) -> None:
         self._pending_help_content = raw
         self._pending_help_expression = None
         result = await self._post_command(f"/help {raw}")
-        self._messages.write(self._format_command_result(result))
+        role = MessageRole.ERROR if result.get("ok") is False else None
+        self._write_message(self._format_command_result(result), role)
         suggestion = result.get("natural_expression") or result.get("correction")
         if (
             result.get("ok")
@@ -559,13 +709,14 @@ class CompanionTerminal(App[None]):
             self._pending_help_expression = suggestion.strip()
             self._mode = InteractionMode.HELP_RESULT
             self._after_mode_change()
-            self._messages.write("Actions:\n- Use this\n- Hint only\n- Try myself")
+            self._write_message("Actions:\n- Use this\n- Hint only\n- Try myself")
         else:
             self._reset_to_normal()
 
     async def _run_hint_capture(self, raw: str) -> None:
         result = await self._post_command(f"/hint {raw}")
-        self._messages.write(self._format_command_result(result))
+        role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
+        self._write_message(self._format_command_result(result), role)
         self._reset_to_normal()
 
     def _begin_capture(self, mode: InteractionMode) -> None:
@@ -580,7 +731,7 @@ class CompanionTerminal(App[None]):
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "What do you want to say?"
-        self._messages.write("What do you want to say?")
+        self._write_message("What do you want to say?")
         self._after_mode_change()
         self._focus_input()
 
@@ -726,7 +877,7 @@ class CompanionTerminal(App[None]):
         try:
             await action()
         except (httpx.HTTPError, ValueError) as exc:
-            self._messages.write(f"[system] Core request failed: {exc}")
+            self._write_message(f"[system] Core request failed: {exc}")
         finally:
             self._waiting = False
             self._input.disabled = False
@@ -739,17 +890,17 @@ class CompanionTerminal(App[None]):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if self._waiting:
-            self._messages.write("[system] Waiting for the current response.")
+            self._write_message("[system] Waiting for the current response.")
             return
         raw = event.value.strip()
         self._last_activity = time.monotonic()
         event.input.value = ""
         if not raw:
             return
-        self._messages.write(f"> {raw}")
+        self._write_message(f"> {raw}")
         if self._mode == InteractionMode.PRACTICE_PROMPT and raw.startswith("/"):
             if raw != "/status":
-                self._messages.write(
+                self._write_message(
                     "[system] Finish your practice answer or choose Skip practice before "
                     "using commands. /status is still available."
                 )
@@ -762,9 +913,9 @@ class CompanionTerminal(App[None]):
         elif self._mode == InteractionMode.AWAITING_HINT_SENTENCE:
             await self._run_guarded(lambda: self._run_hint_capture(raw))
         elif self._mode == InteractionMode.HELP_RESULT:
-            self._messages.write("Please choose an action: Use this / Hint only / Try myself.")
+            self._write_message("Please choose an action: Use this / Hint only / Try myself.")
         elif self._mode == InteractionMode.REVIEW_COMPLETE:
-            self._messages.write("Please press Finish (Ctrl+F), or give a thumbs-up.")
+            self._write_message("Please press Finish (Ctrl+F), or give a thumbs-up.")
         elif raw.startswith("/"):
             await self._run_guarded(lambda: self._send_command(raw))
         elif self._mode == InteractionMode.REVIEW:
@@ -782,7 +933,7 @@ class CompanionTerminal(App[None]):
             return
 
     def _write_onboarding(self) -> None:
-        self._messages.write(
+        self._write_message(
             "Welcome! A few optional choices are ready below. Choose how much correction and "
             "how often Teacher should invite you to practice, use defaults, or skip. "
             "You can keep chatting now and change preferences later."
@@ -807,7 +958,7 @@ class CompanionTerminal(App[None]):
             )
         response.raise_for_status()
         self._onboarding.display = False
-        self._messages.write(confirmation)
+        self._write_message(confirmation)
 
     async def _handle_preferences(self, raw: str) -> None:
         parts = raw.split()
@@ -840,7 +991,7 @@ class CompanionTerminal(App[None]):
             raise ValueError("Use /preferences [defaults|reset|onboard|set NAME VALUE]")
         response.raise_for_status()
         profile = cast(dict[str, Any], response.json())
-        self._messages.write(
+        self._write_message(
             "Preferences: "
             f"corrections={profile['correction_style']}, cadence={profile['proactive_cadence']}, "
             f"active={profile.get('active_hours_start') or '-'}–"
@@ -905,7 +1056,7 @@ class CompanionTerminal(App[None]):
 
     def _write_assistant(self, content: str) -> None:
         """Render assistant Markdown without changing its canonical content."""
-        self._messages.write(Markdown(f"assistant: {content}"))
+        self._write_message(content, MessageRole.ASSISTANT, markdown=True)
 
     async def _respond_to_invitation(self, decision: str) -> None:
         invitation = self._pending_invitation
@@ -926,7 +1077,7 @@ class CompanionTerminal(App[None]):
         self._hide_invitation()
         self._last_activity = time.monotonic()
         if decision != "start":
-            self._messages.write(self._format_invitation_suppression(payload, decision))
+            self._write_message(self._format_invitation_suppression(payload, decision))
             return
         question = payload.get("review_question")
         if isinstance(question, dict):
@@ -936,13 +1087,13 @@ class CompanionTerminal(App[None]):
                 total=int(question.get("total", 1)),
                 prompt=str(question.get("prompt", "")) or None,
             )
-            self._messages.write(self._format_review_question(question))
+            self._write_message(self._format_review_question(question))
         elif payload.get("review_complete"):
-            self._messages.write("No items are due. Review complete.")
+            self._write_message("No items are due. Review complete.")
         elif isinstance(payload.get("conversation_starter"), str):
             self._active_practice_invitation_id = str(invitation["id"])
             self._mode = InteractionMode.PRACTICE_PROMPT
-            self._messages.write(f"Practice prompt: {payload['conversation_starter']}")
+            self._write_message(f"Practice prompt: {payload['conversation_starter']}")
             self._after_mode_change()
 
     def _hide_invitation(self) -> None:
@@ -959,9 +1110,9 @@ class CompanionTerminal(App[None]):
             response.raise_for_status()
             payload = cast(dict[str, Any], response.json())
             self._conversation_id = str(payload["id"])
-            self._messages.write(f"[system] Conversation started: {self._conversation_id}")
+            self._write_message(f"[system] Conversation started: {self._conversation_id}")
         except httpx.HTTPError as exc:
-            self._messages.write(f"[system] Could not start conversation: {exc}")
+            self._write_message(f"[system] Could not start conversation: {exc}")
 
     async def _post_command(self, raw: str) -> dict[str, Any]:
         payload: dict[str, str] = {"raw": raw}
@@ -976,12 +1127,18 @@ class CompanionTerminal(App[None]):
 
     async def _send_command(self, raw: str) -> None:
         result = await self._post_command(raw)
-        self._messages.write(self._format_command_result(result))
+        if result.get("ok") is False:
+            role = MessageRole.ERROR
+        elif result.get("command") == "hint":
+            role = MessageRole.HINT
+        else:
+            role = None
+        self._write_message(self._format_command_result(result), role)
         command = result.get("command")
         if command in {"busy", "dnd", "available", "status"} and result.get("ok"):
             status = await self._fetch_proactive_status()
             if status is not None:
-                self._messages.write(self._format_proactive_status(status))
+                self._write_message(self._format_proactive_status(status))
         if command == "say":
             inserted = result.get("inserted_user_message")
             if (
@@ -1021,15 +1178,16 @@ class CompanionTerminal(App[None]):
         if response.status_code in (404, 409):
             payload = cast(dict[str, Any], response.json())
             detail = payload.get("detail", "Assistant reply can no longer be retried.")
-            self._messages.write(f"[system] {detail}")
+            self._write_message(f"[system] {detail}")
             self._pending_assistant_retry = None
             self._after_mode_change()
             return
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
         if not result.get("ok"):
-            self._messages.write(
-                f"[system] Assistant reply failed: {result.get('error', 'Retry failed.')}"
+            self._write_message(
+                f"[system] Assistant reply failed: {result.get('error', 'Retry failed.')}",
+                MessageRole.ERROR,
             )
             return
         assistant = result.get("assistant_message")
@@ -1053,7 +1211,7 @@ class CompanionTerminal(App[None]):
         if self._mode != InteractionMode.REVIEW or item_id is None:
             return
         if is_materially_han(answer):
-            self._messages.write(ENGLISH_INPUT_REDIRECT)
+            self._write_message(ENGLISH_INPUT_REDIRECT, MessageRole.INCORRECT)
             return
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",
@@ -1068,7 +1226,13 @@ class CompanionTerminal(App[None]):
         result = payload.get("result")
         if not isinstance(result, dict):
             raise ValueError("Invalid review response")
-        self._messages.write(self._format_review_result(result))
+        if result.get("grading_deferred") is True:
+            result_role = MessageRole.HINT
+        elif result.get("correct"):
+            result_role = MessageRole.SUCCESS
+        else:
+            result_role = MessageRole.INCORRECT
+        self._write_message(self._format_review_result(result), result_role)
         next_question = result.get("next_question")
         if isinstance(next_question, dict):
             self._enter_review(
@@ -1082,7 +1246,7 @@ class CompanionTerminal(App[None]):
             self._active_review_item_id = None
             self._active_review_prompt = None
             self._input.placeholder = "Press Finish or give a thumbs-up..."
-            self._messages.write(
+            self._write_message(
                 "Great job — give yourself a thumbs-up to finish the review. "
                 "You can also press Finish (Ctrl+F)."
             )
@@ -1096,7 +1260,7 @@ class CompanionTerminal(App[None]):
             return
         await self.ensure_conversation()
         if self._conversation_id is None:
-            self._messages.write("[system] No active conversation.")
+            self._write_message("[system] No active conversation.")
             return
         response = await self._client.post(
             f"/v1/conversations/{self._conversation_id}/messages",
@@ -1116,16 +1280,19 @@ class CompanionTerminal(App[None]):
                     if invitation_id is None:
                         raise ValueError("Invalid practice retry state")
                     self._pending_assistant_retry["invitation_id"] = invitation_id
-                self._messages.write(
+                self._write_message(
                     "[system] Your message was saved, but the assistant reply failed: "
-                    f"{result.get('error', 'Message failed.')} Choose Retry reply."
+                    f"{result.get('error', 'Message failed.')} Choose Retry reply.",
+                    MessageRole.ERROR,
                 )
                 self._after_mode_change()
                 return
-            self._messages.write(f"[system] {result.get('error', 'Message failed.')}")
+            self._write_message(
+                f"[system] {result.get('error', 'Message failed.')}", MessageRole.ERROR
+            )
             return
         if echo_user:
-            self._messages.write(f"You said: {raw}")
+            self._write_message(f"You said: {raw}")
         assistant = result.get("assistant_message")
         if assistant is not None:
             self._write_assistant(str(assistant["content"]))
@@ -1163,9 +1330,14 @@ class CompanionTerminal(App[None]):
         completion.raise_for_status()
         outcome = completion.json().get("outcome")
         if outcome == "learning_signal_captured":
-            self._messages.write("Practice complete. A useful learning point was saved for review.")
+            self._write_message(
+                "Practice complete. A useful learning point was saved for review.",
+                MessageRole.SUCCESS,
+            )
         else:
-            self._messages.write("Practice complete. This conversation was not graded.")
+            self._write_message(
+                "Practice complete. This conversation was not graded.", MessageRole.SUCCESS
+            )
         self._clear_practice_state()
         self._reset_to_normal()
 
@@ -1182,7 +1354,7 @@ class CompanionTerminal(App[None]):
         response.raise_for_status()
         self._clear_practice_state()
         self._reset_to_normal()
-        self._messages.write("Practice skipped.")
+        self._write_message("Practice skipped.")
 
     def _clear_practice_state(self) -> None:
         """Clear local state associated with a terminal practice transition."""
@@ -1288,7 +1460,7 @@ class CompanionTerminal(App[None]):
                 if self._active_practice_invitation_id is not None:
                     raise ValueError("Practice did not reach a terminal state")
             except (httpx.HTTPError, ValueError) as exc:
-                self._messages.write(
+                self._write_message(
                     f"[system] Could not resolve active practice; quit cancelled: {exc}"
                 )
                 return
@@ -1309,9 +1481,9 @@ class CompanionTerminal(App[None]):
                             "[system] Conversation saved, but memory extraction was not "
                             "completed. Check the provider configuration before the next run."
                         )
-                    self._messages.write(warning)
+                    self._write_message(warning, MessageRole.ERROR)
             except httpx.HTTPError as exc:
-                self._messages.write(f"[system] Could not end conversation; quit cancelled: {exc}")
+                self._write_message(f"[system] Could not end conversation; quit cancelled: {exc}")
                 return
         await self._client.aclose()
         self.exit()
