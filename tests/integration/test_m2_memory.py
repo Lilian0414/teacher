@@ -17,7 +17,7 @@ from companion.memory import MemoryContextBuilder, MemoryRepository, MemoryServi
 from companion.memory.schemas import MemoryAnalysis, MemoryCandidate, MemoryCategory
 from companion.persistence.database import Base, make_engine
 from companion.persistence.repositories import AvailabilityRepository
-from companion.providers.errors import LLMTemporaryError
+from companion.providers.errors import LLMConfigurationError, LLMTemporaryError
 from tests.support import RecordingLLMProvider
 
 
@@ -170,8 +170,28 @@ def test_failed_extraction_preserves_end_and_retries_deterministically() -> None
 
     assert failed["conversation"]["ended_at"] is not None
     assert failed["memory_extraction"]["error"] == "provider offline"
+    assert failed["memory_extraction"]["retryable"] is True
     assert retried["conversation"]["memory_extraction_status"] == "completed"
     assert retried["conversation"]["memory_extraction_attempts"] == 2
+
+
+def test_configuration_failure_is_non_retryable_and_preserves_ended_conversation() -> None:
+    client, provider, _ = make_m2_client()
+
+    with client:
+        conversation = client.post("/v1/conversations").json()
+        client.post(
+            f"/v1/conversations/{conversation['id']}/messages",
+            json={"content": "Remember this important fact."},
+        )
+        provider.memory_extraction_error = LLMConfigurationError(
+            "GROQ_API_KEY is not configured"
+        )
+        failed = client.post(f"/v1/conversations/{conversation['id']}/end").json()
+
+    assert failed["conversation"]["ended_at"] is not None
+    assert failed["conversation"]["memory_extraction_attempts"] == 1
+    assert failed["memory_extraction"]["retryable"] is False
 
 
 def test_candidate_batch_is_atomic_and_failed_attempt_retries_cleanly() -> None:

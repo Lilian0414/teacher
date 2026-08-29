@@ -136,7 +136,9 @@ class MemoryService:
                 conversation, completed_at=self._clock(), error=str(exc)
             )
             return MemoryExtractionResult(
-                conversation_id=conversation_id, error=str(exc), retryable=True
+                conversation_id=conversation_id,
+                error=str(exc),
+                retryable=exc.retryable,
             )
 
         valid_source_ids = {message.id for message in messages}

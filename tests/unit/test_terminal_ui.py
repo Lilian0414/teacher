@@ -906,6 +906,50 @@ async def test_quit_abandons_incomplete_practice_before_ending_conversation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retryable", "warning"),
+    [
+        (False, "Check the provider configuration before the next run."),
+        (True, "Teacher will retry recovery later."),
+    ],
+)
+async def test_quit_allows_exit_after_memory_extraction_failure(
+    retryable: bool,
+    warning: str,
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "conversation": {"ended_at": "now"},
+                "memory_extraction": {
+                    "error": "sanitized provider failure",
+                    "retryable": retryable,
+                },
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+    exited: list[bool] = []
+    terminal.exit = lambda *args, **kwargs: exited.append(True)  # type: ignore[method-assign]
+
+    await terminal.action_quit()
+
+    assert requests == ["/v1/conversations/conversation-1/end"]
+    assert warning in cast(MessageSink, terminal._messages).values[-1]
+    assert "sanitized provider failure" not in cast(MessageSink, terminal._messages).values[-1]
+    assert exited == [True]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 503])
 async def test_quit_finalizes_pending_evidence_and_stays_open_if_core_cannot_resolve(
     status: int,

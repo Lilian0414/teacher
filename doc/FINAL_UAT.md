@@ -192,7 +192,23 @@ after all three deterministic retry scenarios by restarting with `LLM_PROVIDER=g
 - **PASS/FAIL:** ____
 - **Notes/evidence:** ____
 
-### 7. UI, Core, and database consistency
+### 7. Memory-extraction failure does not block quit
+
+- **User action:** First run with `GROQ_API_KEY` absent and quit after sending a message. Then run
+  with a simulated temporary extraction failure and quit after sending a message. Restore the
+  provider and start or explicitly end a later conversation to exercise recovery.
+- **Expected UI:** Both failure paths say that the conversation was saved and allow the app to
+  exit on the first quit. The missing-key warning points to provider configuration; the temporary
+  failure says recovery will be retried later. Later recovery completes without duplicate memory.
+- **API evidence:** Record the ended conversation ID, extraction status/attempt count, and
+  `retryable=false` for the missing key versus `retryable=true` for the temporary failure. Record
+  the later successful recovery of the same conversation as `completed`.
+- **DB evidence:** Confirm one `ended_at` value per conversation, the failed then completed
+  extraction transitions/attempt counts, and at most one memory per extracted candidate.
+- **PASS/FAIL:** ____
+- **Notes/evidence:** ____
+
+### 8. UI, Core, and database consistency
 
 - **User action:** Compare the final UI transcript/status with `/health`, `/v1/state`, and the
   read-only database snapshot; restart `companion` and check the recoverable state again.
@@ -208,5 +224,5 @@ after all three deterministic retry scenarios by restarting with `LLM_PROVIDER=g
 ## Sign-off boundary
 
 Record target Mac model/macOS version, local date/time, commit SHA, operator, and evidence location.
-Issue #55 passes only when all seven sections have real target-run evidence and PASS. CI or Codex
+Issue #55 passes only when all eight sections have real target-run evidence and PASS. CI or Codex
 must not pre-fill these fields or claim that the live Groq/Ollama/Textual run succeeded.
