@@ -1,147 +1,124 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+These instructions define the repository-local development workflow for Teacher.
 
-> **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
-> `.beads/issues.jsonl` is a passive export, not the wire protocol.
->
-> See [SYNC_CONCEPTS.md](https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md)
-> for the one-screen overview and anti-patterns (don't treat JSONL as the
-> source of truth; don't `bd import` during normal operation; don't
-> reach for third-party Dolt hosting before trying the default).
+## Precedence
 
-## Codex implementation delivery contract
+Follow, in order:
 
-For GitHub Issues explicitly delegated to Codex:
+1. Explicit current user/task instructions.
+2. This repository's `AGENTS.md` and more specific directory instructions.
+3. The linked GitHub Issue/spec and repository-native quality gates.
+4. Optional local tooling such as OpenSpec or Beads when it helps without creating a conflicting workflow.
 
-- Treat the linked GitHub Issue/spec as the task-specific source of truth.
-- Start from the latest requested base branch, normally `main`, and keep changes focused to the delegated Issue.
-- Read this file and repository-local skills/instructions before editing.
-- Run the strongest applicable repository checks requested by the Issue (normally Ruff, strict mypy, pytest, migrations/packaging checks when relevant, and `git diff --check`).
-- Do not broaden scope or rewrite unrelated code.
-- Do not merge the implementation PR.
-- The **GitHub PR is the delivery boundary**. A task summary or task-local commit alone is not delivery.
-- Task/session visibility is not required as a separate workflow gate. If triggered asynchronously, continue the delegated work normally and publish/update the implementation result when possible.
-- If the environment exposes **Create PR**, leaving the completed implementation ready for that handoff is acceptable; a human may perform that publication click.
-- If publication is blocked, preserve the completed implementation and report the exact blocker. Do not redo the feature merely because push/PR creation failed.
-- When review findings are sent back, update the same implementation/PR where practical, run affected checks again, and do not merge.
-- If equivalent work has already merged and this is a delayed duplicate task, stop rather than resolving duplicate-work conflicts or reimplementing it.
+When behavior or requirements are unclear, inspect repository evidence first. Do not implement from assumptions based only on filenames, README prose, TODOs, or isolated snippets.
 
-Implementation ownership remains with Codex for delegated Issues unless the user explicitly changes ownership. ChatGPT/planner-side review or publication delays are not permission for a second implementation writer to take over silently.
+## Ownership
 
-## Quick Reference
+Default ownership is:
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
-```
+- **User**: product direction and final decisions.
+- **ChatGPT/planner**: requirement clarification, repository inspection, architecture judgment, GitHub Issue/spec writing, work ordering, Codex delegation, PR review, CI/UAT judgment, and direct implementation only when the user explicitly assigns it.
+- **Codex**: repository implementation, repository-native verification, and commit creation for tasks explicitly delegated to Codex.
 
-## Non-Interactive Shell Commands
+Use one active implementation writer per coherent task. Do not silently replace an assigned writer because publication, review, or CI is delayed.
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+## Durable task contract
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+Meaningful behavior, API, schema, migration, cross-module, or otherwise non-trivial changes should have a clear GitHub Issue/spec before implementation. The Issue should define scope, non-goals, acceptance criteria, constraints, and verification.
 
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
+For explicitly delegated implementation work, the linked GitHub Issue/spec is the task-specific source of truth.
 
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
+OpenSpec may be used when it adds useful design detail, but it must not create a second conflicting status lifecycle. Beads may remain available as optional local/internal task or memory tooling, but it is not required for the GitHub Issue → implementation → PR workflow and does not override the linked GitHub Issue/spec.
 
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+## Codex implementation handoff
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
-## Beads Issue Tracker
+For tasks explicitly delegated to Codex, use:
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+`inspect → implement → verify → commit → report → STOP`
 
-### Quick Reference
+Before editing, Codex must:
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+- read the linked Issue/spec and these repository instructions;
+- confirm the requested base branch/SHA;
+- inspect the relevant current code, tests, migrations, and runtime boundaries;
+- check whether valid equivalent implementation work already exists.
 
-### Rules
+During implementation:
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- make the smallest coherent change that satisfies the Issue;
+- preserve unrelated behavior and user changes;
+- do not broaden scope or perform unrelated refactors;
+- run the strongest applicable repository-native checks;
+- commit completed work and report the commit SHA, branch/task ref when available, checks actually run, and any unverified layer.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+Hard stop rules for Codex-delegated work:
 
-## Agent Context Profiles
+- **Do not create a pull request.**
+- **Do not attempt PR publication or publication recovery.**
+- **Do not merge.**
+- A valid completed implementation commit is `implementation complete` even when no PR exists yet.
+- A missing or failed PR publication step is not an implementation failure and is not a reason to reimplement valid work.
+- When review findings require code changes, return them to the same Codex implementation writer/task where practical, then verify and commit the fix before stopping again.
 
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+The user publishes Codex work as a PR manually unless they explicitly change that workflow.
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+## ChatGPT direct implementation
 
-## Session Completion
+When the user explicitly assigns repository implementation directly to ChatGPT instead of Codex, ChatGPT may own the full repository change lifecycle for that task:
 
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
+`inspect/spec → implement → verify → commit/branch → create PR → independently review GitHub-visible diff/current head/CI → merge when acceptable and authorized`
 
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
+For direct ChatGPT implementation:
 
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   bd dolt push
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
+- keep the same Issue/scope/verification discipline;
+- create a branch rather than editing `main` directly for meaningful changes;
+- independently review the resulting GitHub-visible diff rather than relying on the implementation summary;
+- confirm CI/review status corresponds to the current PR head SHA before treating CI as green;
+- merge only after the applicable review/CI/UAT gates are satisfied or the user explicitly accepts any remaining risk.
 
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
+## PR review and completion states
 
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-## Beads Issue Tracker
+After a PR exists, review correctness, scope, architecture, regression risk, migration/data safety when relevant, acceptance criteria, review comments, and current-head CI.
 
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
+Always distinguish these states:
 
-### Quick Reference
+`implementation complete` → `PR available` → `current-head CI green` → `UAT passed` → `merged`
+
+Do not collapse them into a generic "done" state.
+
+## Repository-native verification
+
+Discover and run the checks appropriate to the change. The repository currently uses Python 3.12 with these primary quality gates:
 
 ```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
+ruff check .
+mypy .
+pytest
+git diff --check
 ```
 
-### Rules
+Also run migration, packaging, integration, UI, or manual user-flow verification when the changed behavior requires it. Do not equate passing unit tests with proving user-facing behavior when those are different claims.
 
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
+If a verification layer cannot run in the current environment, report exactly what remains unverified.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->
+## Scope discipline
+
+- Do not silently add unrelated refactors, dependencies, migrations, redesigns, or cleanup.
+- Include newly discovered work only when it is required to satisfy or unblock the current acceptance criteria.
+- Record useful but independent findings as separate follow-up work.
+- Reuse existing matching branches, commits, Issues, tasks, or PRs instead of creating duplicate implementation.
+
+## Non-interactive shell commands
+
+Use non-interactive forms for commands that may prompt in automated environments, for example:
+
+```bash
+cp -f source dest
+mv -f source dest
+rm -f file
+rm -rf directory
+cp -rf source dest
+```
+
+If a required command, sync, push, or publication step is blocked, preserve valid completed work and report the exact blocker instead of starting over.
