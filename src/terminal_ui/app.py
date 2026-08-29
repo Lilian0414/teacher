@@ -336,17 +336,17 @@ class CompanionTerminal(App[None]):
             return MessageRole.USER
         if "hint" in lowered or "couldn't grade" in lowered or "deferred" in lowered:
             return MessageRole.HINT
+        if any(
+            cue in lowered
+            for cue in ("failed", "error", "could not", "unavailable:", "quit cancelled")
+        ):
+            return MessageRole.ERROR
         if lowered.startswith("correct") or any(
             cue in lowered for cue in ("complete.", "completed", "great work", "saved")
         ):
             return MessageRole.SUCCESS
         if lowered.startswith("incorrect") or "try again" in lowered:
             return MessageRole.INCORRECT
-        if any(
-            cue in lowered
-            for cue in ("failed", "error", "could not", "unavailable:", "quit cancelled")
-        ):
-            return MessageRole.ERROR
         return MessageRole.NEUTRAL
 
     def action_transcript_page_up(self) -> None:
@@ -518,7 +518,7 @@ class CompanionTerminal(App[None]):
     async def action_finish_review(self) -> None:
         if self._mode != InteractionMode.REVIEW_COMPLETE:
             return
-        self._write_message("Review finished. Great work!")
+        self._write_message("Review finished. Great work!", MessageRole.SUCCESS)
         self._reset_to_normal()
 
     async def action_help_intent(self) -> None:
@@ -552,7 +552,9 @@ class CompanionTerminal(App[None]):
         try:
             await self._recorder.start()
         except MicrophoneUnavailableError as exc:
-            self._write_message(f"[system] {exc} You can still type your answer.")
+            self._write_message(
+                f"[system] {exc} You can still type your answer.", MessageRole.ERROR
+            )
             return
         self._recording = True
         self._refresh_practice_panel()
@@ -687,7 +689,7 @@ class CompanionTerminal(App[None]):
         if content is None:
             return
         result = await self._post_command(f"/hint {content}")
-        self._write_message(self._format_command_result(result))
+        self._write_message(self._format_command_result(result), MessageRole.HINT)
         self._reset_to_normal()
 
     async def _run_help_capture(self, raw: str) -> None:
@@ -1175,7 +1177,8 @@ class CompanionTerminal(App[None]):
         result = cast(dict[str, Any], response.json())
         if not result.get("ok"):
             self._write_message(
-                f"[system] Assistant reply failed: {result.get('error', 'Retry failed.')}"
+                f"[system] Assistant reply failed: {result.get('error', 'Retry failed.')}",
+                MessageRole.ERROR,
             )
             return
         assistant = result.get("assistant_message")
@@ -1199,7 +1202,7 @@ class CompanionTerminal(App[None]):
         if self._mode != InteractionMode.REVIEW or item_id is None:
             return
         if is_materially_han(answer):
-            self._write_message(ENGLISH_INPUT_REDIRECT)
+            self._write_message(ENGLISH_INPUT_REDIRECT, MessageRole.INCORRECT)
             return
         response = await self._client.post(
             f"/v1/review/{item_id}/answer",
@@ -1214,7 +1217,13 @@ class CompanionTerminal(App[None]):
         result = payload.get("result")
         if not isinstance(result, dict):
             raise ValueError("Invalid review response")
-        self._write_message(self._format_review_result(result))
+        if result.get("grading_deferred") is True:
+            result_role = MessageRole.HINT
+        elif result.get("correct"):
+            result_role = MessageRole.SUCCESS
+        else:
+            result_role = MessageRole.INCORRECT
+        self._write_message(self._format_review_result(result), result_role)
         next_question = result.get("next_question")
         if isinstance(next_question, dict):
             self._enter_review(
@@ -1264,11 +1273,14 @@ class CompanionTerminal(App[None]):
                     self._pending_assistant_retry["invitation_id"] = invitation_id
                 self._write_message(
                     "[system] Your message was saved, but the assistant reply failed: "
-                    f"{result.get('error', 'Message failed.')} Choose Retry reply."
+                    f"{result.get('error', 'Message failed.')} Choose Retry reply.",
+                    MessageRole.ERROR,
                 )
                 self._after_mode_change()
                 return
-            self._write_message(f"[system] {result.get('error', 'Message failed.')}")
+            self._write_message(
+                f"[system] {result.get('error', 'Message failed.')}", MessageRole.ERROR
+            )
             return
         if echo_user:
             self._write_message(f"You said: {raw}")
@@ -1309,9 +1321,14 @@ class CompanionTerminal(App[None]):
         completion.raise_for_status()
         outcome = completion.json().get("outcome")
         if outcome == "learning_signal_captured":
-            self._write_message("Practice complete. A useful learning point was saved for review.")
+            self._write_message(
+                "Practice complete. A useful learning point was saved for review.",
+                MessageRole.SUCCESS,
+            )
         else:
-            self._write_message("Practice complete. This conversation was not graded.")
+            self._write_message(
+                "Practice complete. This conversation was not graded.", MessageRole.SUCCESS
+            )
         self._clear_practice_state()
         self._reset_to_normal()
 
@@ -1455,7 +1472,7 @@ class CompanionTerminal(App[None]):
                             "[system] Conversation saved, but memory extraction was not "
                             "completed. Check the provider configuration before the next run."
                         )
-                    self._write_message(warning)
+                    self._write_message(warning, MessageRole.ERROR)
             except httpx.HTTPError as exc:
                 self._write_message(f"[system] Could not end conversation; quit cancelled: {exc}")
                 return

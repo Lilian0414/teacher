@@ -1075,8 +1075,39 @@ async def test_quit_allows_exit_after_memory_extraction_failure(
 
     assert requests == ["/v1/conversations/conversation-1/end"]
     assert warning in cast(MessageSink, terminal._messages).values[-1]
+    assert render(cast(MessageSink, terminal._messages).values[-1]).startswith("Error:")
     assert "sanitized provider failure" not in cast(MessageSink, terminal._messages).values[-1]
     assert exited == [True]
+
+
+@pytest.mark.asyncio
+async def test_saved_message_with_failed_assistant_reply_renders_as_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/conversations/conversation-1/messages"
+        return httpx.Response(
+            200,
+            json={
+                "ok": False,
+                "retryable": True,
+                "user_message": {"id": "user-1"},
+                "error": "Assistant unavailable",
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._conversation_id = "conversation-1"
+
+    await terminal._send_chat_message("Keep this message")
+
+    rendered = render(cast(MessageSink, terminal._messages).values[-1])
+    assert rendered.startswith("Error:")
+    assert "message was saved" in rendered
+    assert "assistant reply failed" in rendered
+    await terminal._client.aclose()
 
 
 @pytest.mark.asyncio
