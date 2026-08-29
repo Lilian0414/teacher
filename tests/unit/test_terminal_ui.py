@@ -1817,7 +1817,37 @@ async def test_hint_intent_creates_learning_item_and_does_not_offer_actions() ->
     assert terminal._mode == InteractionMode.NORMAL
     assert terminal._pending_help_content is None
     assert any("Hints" in value for value in sink.values)
+    assert render(sink.values[-1]).startswith("Hint:")
     assert not any("Actions:" in value for value in sink.values)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["help", "hint"])
+async def test_captured_command_configuration_failure_renders_as_error(command: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "command": command,
+                "ok": False,
+                "message": "GROQ_API_KEY is not configured",
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    if command == "help":
+        await terminal._run_help_capture("What should I say?")
+    else:
+        await terminal._run_hint_capture("What should I say?")
+
+    rendered = render(cast(MessageSink, terminal._messages).values[-1])
+    assert rendered.startswith("Error:")
+    assert "GROQ_API_KEY is not configured" in rendered
+    await terminal._client.aclose()
 
 
 @pytest.mark.asyncio
@@ -1901,7 +1931,35 @@ async def test_hint_only_reuses_pending_content_without_leaving_help_result_dang
     await terminal.action_hint_intent()
 
     assert terminal._mode == InteractionMode.NORMAL
-    assert any("Hints" in value for value in sink.values)
+    assert any(render(value).startswith("Hint: Hints") for value in sink.values)
+
+
+@pytest.mark.asyncio
+async def test_hint_only_configuration_failure_renders_as_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "command": "hint",
+                "ok": False,
+                "message": "GROQ_API_KEY is not configured",
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._mode = InteractionMode.HELP_RESULT
+    terminal._pending_help_content = "What should I say?"
+
+    await terminal.action_hint_intent()
+
+    rendered = render(cast(MessageSink, terminal._messages).values[-1])
+    assert rendered.startswith("Error:")
+    assert "GROQ_API_KEY is not configured" in rendered
+    await terminal._client.aclose()
 
 
 def test_try_myself_returns_to_normal_input_without_sending() -> None:

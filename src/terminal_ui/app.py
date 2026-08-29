@@ -689,14 +689,16 @@ class CompanionTerminal(App[None]):
         if content is None:
             return
         result = await self._post_command(f"/hint {content}")
-        self._write_message(self._format_command_result(result), MessageRole.HINT)
+        role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
+        self._write_message(self._format_command_result(result), role)
         self._reset_to_normal()
 
     async def _run_help_capture(self, raw: str) -> None:
         self._pending_help_content = raw
         self._pending_help_expression = None
         result = await self._post_command(f"/help {raw}")
-        self._write_message(self._format_command_result(result))
+        role = MessageRole.ERROR if result.get("ok") is False else None
+        self._write_message(self._format_command_result(result), role)
         suggestion = result.get("natural_expression") or result.get("correction")
         if (
             result.get("ok")
@@ -713,7 +715,8 @@ class CompanionTerminal(App[None]):
 
     async def _run_hint_capture(self, raw: str) -> None:
         result = await self._post_command(f"/hint {raw}")
-        self._write_message(self._format_command_result(result))
+        role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
+        self._write_message(self._format_command_result(result), role)
         self._reset_to_normal()
 
     def _begin_capture(self, mode: InteractionMode) -> None:
@@ -1124,7 +1127,13 @@ class CompanionTerminal(App[None]):
 
     async def _send_command(self, raw: str) -> None:
         result = await self._post_command(raw)
-        self._write_message(self._format_command_result(result))
+        if result.get("ok") is False:
+            role = MessageRole.ERROR
+        elif result.get("command") == "hint":
+            role = MessageRole.HINT
+        else:
+            role = None
+        self._write_message(self._format_command_result(result), role)
         command = result.get("command")
         if command in {"busy", "dnd", "available", "status"} and result.get("ok"):
             status = await self._fetch_proactive_status()
