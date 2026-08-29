@@ -52,6 +52,27 @@ During implementation:
 - run the strongest applicable repository-native checks;
 - commit completed work and report the commit SHA, branch/task ref when available, checks actually run, and any unverified layer.
 
+### Codex routing: initial implementation vs PR follow-up
+
+Choose the Codex trigger location from the current lifecycle state. Do not use the two entry modes interchangeably.
+
+**Initial implementation (no PR exists yet):**
+
+- trigger Codex from the GitHub Issue/spec;
+- work from the explicitly requested base branch/SHA, normally `main@<sha>`;
+- implement and verify the scoped task, commit it, report, and stop;
+- the user publishes that completed implementation as a PR.
+
+**PR review follow-up (a PR already exists):**
+
+- trigger Codex from the existing PR conversation, not from the original Issue;
+- treat the current PR head/branch as the implementation baseline and continue the same implementation writer/task;
+- do not reset to `main`, do not reconstruct the implementation from the Issue's original base SHA, and do not create a duplicate implementation branch or PR;
+- before editing, confirm the checkout contains the current PR head (or the PR context has supplied an equivalent checked-out head). If the current PR head is unavailable, STOP and report the checkout/context blocker instead of rebuilding from base;
+- apply only the review-requested correction, verify it, commit it on the existing PR branch, report the new head/commit, and stop.
+
+After a PR follow-up commit appears, ChatGPT/planner must re-fetch the PR's current head SHA, independently review the new GitHub-visible diff, and accept CI only when the CI run corresponds to that exact current head SHA.
+
 Hard stop rules for Codex-delegated work:
 
 - **Do not create a pull request.**
@@ -59,9 +80,9 @@ Hard stop rules for Codex-delegated work:
 - **Do not merge.**
 - A valid completed implementation commit is `implementation complete` even when no PR exists yet.
 - A missing or failed PR publication step is not an implementation failure and is not a reason to reimplement valid work.
-- When review findings require code changes, return them to the same Codex implementation writer/task where practical, then verify and commit the fix before stopping again.
+- When review findings require code changes, return them to the same Codex implementation writer/task where practical, using the existing PR conversation once a PR exists, then verify and commit the fix before stopping again.
 
-The user publishes Codex work as a PR manually unless they explicitly change that workflow.
+The user publishes Codex work as a PR manually unless they explicitly change that workflow. Updating the already-existing PR branch during a PR review follow-up is continuation of the same implementation, not creation/publication of a new PR.
 
 ## ChatGPT direct implementation
 
@@ -80,6 +101,8 @@ For direct ChatGPT implementation:
 ## PR review and completion states
 
 After a PR exists, review correctness, scope, architecture, regression risk, migration/data safety when relevant, acceptance criteria, review comments, and current-head CI.
+
+If PR review finds a code issue in Codex-owned work, route the follow-up from the existing PR conversation and current PR head. Do not re-trigger the original Issue from its old base SHA.
 
 Always distinguish these states:
 
