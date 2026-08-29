@@ -1,9 +1,12 @@
+import asyncio
 import subprocess
 from collections.abc import Callable
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from rich.text import Text
 
 from terminal_ui.app import CompanionTerminal, InteractionMode
 from terminal_ui.gestures import (
@@ -267,3 +270,45 @@ async def test_post_start_failure_deactivates_gestures_without_ending_review() -
     assert terminal._mode == InteractionMode.REVIEW
     assert "type or speak your answer" in str(terminal._review_feedback.renderable)
     await terminal._client.aclose()
+
+@pytest.mark.asyncio
+async def test_gesture_feedback_is_colored_coalesced_focus_safe_and_auto_dismissed() -> None:
+    terminal = CompanionTerminal(gesture_adapter=FakeGestureAdapter())
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test() as pilot:
+        terminal._mode = InteractionMode.REVIEW
+        terminal._active_review_item_id = None
+        terminal._refresh_practice_panel()
+        terminal._input.focus()
+        await pilot.pause()
+
+        await terminal.handle_gesture(GestureIntent.UNCERTAINTY)
+        first_timer = terminal._gesture_feedback_timer
+        assert first_timer is not None
+        feedback = cast(Text, terminal._gesture_feedback.renderable)
+        assert "👎" in str(feedback)
+        assert "yellow" in str(feedback.style)
+        assert terminal.focused is terminal._input
+
+        await terminal.handle_gesture(GestureIntent.UNCERTAINTY)
+        assert first_timer is not terminal._gesture_feedback_timer
+        await asyncio.sleep(0)
+        assert first_timer.cancelled()
+        assert terminal.focused is terminal._input
+
+        terminal._mode = InteractionMode.REVIEW_COMPLETE
+        terminal.action_finish_review = AsyncMock()  # type: ignore[method-assign]
+        await terminal.handle_gesture(GestureIntent.THUMBS_UP)
+        feedback = cast(Text, terminal._gesture_feedback.renderable)
+        assert "👍" in str(feedback)
+        assert "green" in str(feedback.style)
+        assert terminal.focused is terminal._input
+
+        await asyncio.sleep(0.95)
+        await pilot.pause()
+        assert not terminal._gesture_feedback.display
+        assert terminal.focused is terminal._input
