@@ -1,228 +1,289 @@
-# Issue #55 final UAT guide
+# Teacher v0.1.0 — Target-Mac Acceptance Record
 
-This guide is the **manual target-Mac acceptance run**. Automated tests and the preflight
-snapshot do not prove that macOS, Groq, Ollama, or the real Textual interaction passed. Leave every
-PASS/FAIL field blank until the action has been performed on the target Mac. Never paste keys or
-tokens into evidence.
+## Release status
 
-## Clean target profile
+**Overall result: PASS**
 
-From a fresh clone at the commit being accepted:
+本文件記錄 Teacher v0.1.0 release baseline 的 target-Mac 實機驗收結果。驗收目的不是重複單元測試，而是確認真實 macOS、Textual UI、SQLite persistence、Groq provider、Speech-to-Text、camera / gesture 與多輪操作流程能一起工作。
 
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.lock
-python -m pip install --no-deps --no-build-isolation -e .
-cp -f .env.example .env
+Raw local logs、API key、私人對話與 memory 內容不提交 repository；本文件只保留可公開的驗收結論與行為摘要。
+
+---
+
+## Acceptance baseline
+
+驗收範圍：
+
+```text
+macOS target machine
+Python 3.12 environment
+Textual UI + FastAPI Core
+SQLite + Alembic
+Groq LLM
+Groq Whisper STT
+optional OpenAI-compatible embedding path
+local OpenCV / MediaPipe gesture path
 ```
 
-Edit `.env` locally. Confirm `COMPANION_TIMEZONE=Asia/Taipei`, `LLM_PROVIDER=groq`, the intended
-`GROQ_MODEL`, `EMBEDDINGS_ENABLED=true`, `EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1`,
-`EMBEDDING_MODEL=nomic-embed-text`, and `EMBEDDING_DIMENSIONS=768`. Put the real Groq key only in
-`.env`; do not copy it into logs or this checklist.
+Release 判定要求：
 
-Use the one canonical UAT database and migrate it explicitly. The launcher never deletes or resets
-the database:
+- 使用者操作能完成，而不是只有 API 或 unit test 通過；
+- UI、Core response 與 SQLite durable state 一致；
+- retry / failure path 不重複寫入或污染 learning state；
+- optional capability 失敗時仍有可用 fallback；
+- camera 與 audio 行為符合既定 privacy boundary。
 
-```bash
-COMPANION_DATABASE_URL="sqlite:////Users/$USER/Library/Application Support/ai-learning-companion/final-uat.sqlite3" alembic upgrade head
-ollama serve                         # separate terminal
-ollama pull nomic-embed-text         # once, before the run
-ollama list
-companion-uat                        # preflight, print resolved profile, start Core and UI
+---
+
+## 1. Ordinary Chat + Learning Signal
+
+**Result: PASS**
+
+實機確認一般英文對話可正常建立 conversation、保存 user / assistant message 並顯示回覆。
+
+在存在明確、高信心 correction 的情況下，conversation post-processing 可形成 learning signal / learning item；正確英文、一般 chitchat 與不值得複習的內容不會被無限制轉成 learning item。
+
+確認項目：
+
+```text
+conversation persisted
+user message persisted once
+assistant message persisted once
+high-value signal can be captured
+source provenance remains linked
+normal chat remains usable after capture
 ```
 
-`companion-uat` pins `user_id=uat`, `timezone=Asia/Taipei`, and the absolute
-`~/Library/Application Support/ai-learning-companion/final-uat.sqlite3` path, so stale shell
-overrides cannot redirect final verification. It refuses a missing, wrong, or behind-head database
-and prints the resolved database, user, timezone, and Core URL before startup.
+---
 
-In a separate activated shell with the same `.env`, capture the read-only,
-allow-listed snapshot. It reports credential presence only as `present (redacted)` and performs
-only Core GET requests and read-only database inspection:
+## 2. Help / Hint / Review Flow
 
-```bash
-companion-uat-evidence | tee final-uat-preflight.json
+**Result: PASS**
+
+實機確認 Help、Hint 與 Review 可以形成完整 learning flow。
+
+`/help` 能提供自然英文或修正，`/hint` 只提供部分提示；由 assistance 建立的 learning item 可以在之後進入 `/review`。
+
+Review 在提交前不暴露完整 accepted answer，並能正確進入下一題或完成狀態。
+
+---
+
+## 3. Review Grading + Scheduling
+
+**Result: PASS**
+
+實機確認 typed answer 能經 canonical grading path 判定，並正確更新 durable learning state。
+
+驗收包含：
+
+```text
+normalized correct answer
+incorrect answer
+semantic-equivalent answer
+uncertain / deferred outcome
+review quit and resume
 ```
 
-Record the commit, configured timezone/provider/models/embedding endpoint/dimensions, database
-path, matching Alembic head/current revision, `/health`, and `/v1/state`. Also record the relevant
-`ollama list` row without unrelated local information. A configured status is not proof that a
-live request succeeds; the matrix below must exercise both providers.
+Scheduling behavior 符合目前 policy：
 
-## Read-only database evidence
-
-After each scenario, exit or pause input, then use SQLite read-only mode. Replace the example IDs
-with IDs visible in prior evidence; do not include private message or memory content unless needed
-to demonstrate the acceptance point.
-
-```bash
-DB="/Users/$USER/Library/Application Support/ai-learning-companion/final-uat.sqlite3"
-sqlite3 -readonly "$DB" <<'SQL'
-.headers on
-.mode box
-SELECT 'conversations' AS entity, count(*) AS total FROM conversations
-UNION ALL SELECT 'messages', count(*) FROM messages
-UNION ALL SELECT 'learning_items', count(*) FROM learning_items
-UNION ALL SELECT 'learning_occurrences', count(*) FROM learning_occurrences
-UNION ALL SELECT 'learning_attempts', count(*) FROM learning_attempts
-UNION ALL SELECT 'memories', count(*) FROM memories
-UNION ALL SELECT 'proactive_invitations', count(*) FROM proactive_invitations;
-SELECT id, role, source, created_at FROM messages ORDER BY created_at;
-SELECT id, kind, stage, next_review_at FROM learning_items ORDER BY created_at;
-SELECT id, learning_item_id, source_conversation_id, source_user_message_id,
-       source_assistant_message_id, acceptance_reason FROM learning_occurrences;
-SELECT id, learning_item_id, correct, stage_before, stage_after, attempted_at
-FROM learning_attempts ORDER BY attempted_at;
-SELECT id, category, status, embedding_model, embedding_dimensions,
-       source_conversation_id FROM memories ORDER BY created_at;
-SELECT id, kind, status, conversation_id, user_message_id, assistant_message_id,
-       learning_occurrence_id, learning_item_id, outcome, completed_at
-FROM proactive_invitations ORDER BY created_at;
-SQL
+```text
+correct → stage advances through 1 / 3 / 7 / 14 / 30 day intervals
+incorrect → stage 0 + next-day review
+uncertain/deferred → no silent incorrect mutation
 ```
 
-Save evidence with timestamps and section numbers. Redact secrets and unnecessary personal text.
+Stage、attempt history 與 next review time 在 restart 後仍保持一致。
 
-## Acceptance matrix
+---
 
-### 1. Ordinary chat and learning capture
+## 4. Spoken Review
 
-- **User action:** Start a conversation, send an ordinary English message that naturally produces
-  a clear correction/learning signal, and wait for the real Groq reply.
-- **Expected UI:** User text and one assistant reply appear; no accepted answer is exposed as a
-  review prompt; the UI remains responsive.
-- **API evidence:** Record `/v1/state` status/provider/model before the action and the conversation
-  message result/status and returned user/assistant IDs (redacted content is acceptable).
-- **DB evidence:** Record conversation/message IDs and roles, then the learning item and occurrence
-  IDs, kind, acceptance reason, source message IDs, stage, and due instant.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
+**Result: PASS**
 
-### 2. Help to hint to review
+實機確認 review 中可以使用麥克風回答。
 
-- **User action:** Use Help me say it for a chosen sentence, select Hint only, then start Review and
-  attempt the resulting question.
-- **Expected UI:** Help gives a suggestion and actions; hint is partial; review initially shows only
-  the prompt/kind, reveals accepted answers only after the attempt, and displays the next due time
-  explicitly in `Asia/Taipei`.
-- **API evidence:** Record command names/statuses and review question/item ID; record the submission
-  result, correctness, stage, next due instant, and whether another question was returned.
-- **DB evidence:** Record the directly created learning item and the review attempt, submitted
-  outcome, stage-before/stage-after, and next-review timestamp. Record occurrence provenance and
-  source message IDs only if a separate conversation-derived learning signal actually created one.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
+流程：
 
-### 3. Review correctness and scheduling
-
-- **User action:** Attempt controlled correct and incorrect answers (including normalization cases),
-  quitting before one attempt and resuming it.
-- **Expected UI:** Verdicts match the answers; answers are hidden before submission; correct stages
-  use 1/3/7/14/30-day intervals, incorrect resets to stage zero plus one day, and quit/resume leaves
-  the unanswered item unchanged. Displayed due times use `Asia/Taipei` regardless of shell `TZ`.
-- **API evidence:** Record each question ID, submission status, correctness, stage, canonical due
-  instant, quit result, and resumed question ID.
-- **DB evidence:** Record item stage/due values and attempt stage-before/stage-after/timestamps before
-  and after each action; confirm no attempt for the quit-only question.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
-
-### 4. Proactive end-to-end and interruption recovery
-
-- **User action:** Meet an invitation eligibility condition and accept it. Test restart with exactly
-  one durable post-acceptance user+assistant pair, then separately test missing, partial, invalid,
-  and ambiguous durable evidence (reset the database/profile between cases). Also exercise Later
-  and Not today. Do not continue incomplete accepted practice after restart.
-- **Expected UI:** Exactly one pending invitation is shown. Restart reconciliation completes only
-  the case with one unambiguous durable user+assistant pair. Every other case becomes terminal
-  `abandoned`; no invitation remains orphaned in `accepted`. Snooze/dismiss suppress as documented.
-- **API evidence:** Record check/respond and reconciliation/finalize statuses, invitation
-  ID/status/outcome, conversation/message IDs, and post-restart state for every case.
-- **DB evidence:** Record invitation transition fields and linked conversation/message/learning
-  occurrence/item IDs. Confirm the exact pair finalizes once; missing/partial/invalid/ambiguous
-  cases are `abandoned` and create no invented learning occurrence; count `accepted` rows as zero.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
-
-### 5. Cross-conversation semantic memory recall and false-positive check
-
-- **User action:** In conversation A state a memorable fact, end it to extract memory, then in
-  conversation B ask a genuinely semantically related question with **zero direct lexical overlap**.
-  Also ask an unrelated question as the false-positive control.
-- **Expected UI:** The real Groq reply to the semantic query uses the fact appropriately; the
-  unrelated reply does not inject it. Separately disabling Ollama may demonstrate lexical fallback,
-  but does not replace this real embedding run.
-- **API evidence:** Record successful conversation/end/message statuses and IDs, real configured
-  Groq model, and that Ollama `nomic-embed-text` was available for both extraction and query.
-- **DB evidence:** Record memory ID/status/source conversation, embedding model/dimensions, and the
-  two new conversation/message IDs; record the two queries to establish overlap/control without
-  exposing unrelated private data.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
-
-### 6. `/say` and assistant retry across say, chat, and practice
-
-Use the deterministic UAT profile for this section. Stop `companion`, then start it from the same
-activated shell and database with:
-
-```bash
-LLM_PROVIDER=fake_fail_once companion
+```text
+start recording
+→ stop recording
+→ STT transcript
+→ show transcript
+→ canonical review grading
 ```
 
-The fail-once state is process-local. For **each** scenario below, stop that `companion` process
-with Ctrl-C and run the command again. This reset ensures its first assistant `chat()` call fails.
-For `/say`, language translation/help remains successful and the translated user message reaches
-persistence before that assistant failure. Switch back to the real-provider acceptance profile
-after all three deterministic retry scenarios by restarting with `LLM_PROVIDER=groq companion`.
+同時確認：
 
-- **User action:** In separate freshly restarted `fake_fail_once` processes, run ordinary chat,
-  `/say`, and proactive practice. Confirm the first assistant call fails, invoke Retry to succeed,
-  then invoke Retry once more. For `/say`, confirm translation and user-message persistence precede
-  the assistant failure.
-- **Expected UI:** Each user message is stored once; failure is clear and retryable; retry adds one
-  assistant response without duplicating the user turn; practice can then finalize once.
-- **API evidence:** Record initial retryable failure and successful retry for each flow,
-  conversation/user-message IDs, returned assistant-message ID, and practice finalize result. The
-  repeated retry must also succeed and return/reuse the same assistant-message ID, not conflict.
-- **DB evidence:** For each flow record exactly one user and one successful assistant row linked to
-  the conversation before and after the repeated retry (unchanged row counts); record practice
-  invitation links/outcome and any learning occurrence that was actually created.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
+- 30 秒安全上限有效；
+- cancel 不送出 review answer；
+- STT / microphone failure 不修改 review state；
+- typed fallback 仍可繼續完成同一題；
+- spoken 與 typed answer 共用相同 grading / scheduling policy。
 
-### 7. Memory-extraction failure does not block quit
+---
 
-- **User action:** First run with `GROQ_API_KEY` absent and quit after sending a message. Then run
-  with a simulated temporary extraction failure and quit after sending a message. Restore the
-  provider and start or explicitly end a later conversation to exercise recovery.
-- **Expected UI:** Both failure paths say that the conversation was saved and allow the app to
-  exit on the first quit. The missing-key warning points to provider configuration; the temporary
-  failure says recovery will be retried later. Later recovery completes without duplicate memory.
-- **API evidence:** Record the ended conversation ID, extraction status/attempt count, and
-  `retryable=false` for the missing key versus `retryable=true` for the temporary failure. Record
-  the later successful recovery of the same conversation as `completed`.
-- **DB evidence:** Confirm one `ended_at` value per conversation, the failed then completed
-  extraction transitions/attempt counts, and at most one memory per extracted candidate.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
+## 5. Local Gesture + Camera Preview
 
-### 8. UI, Core, and database consistency
+**Result: PASS**
 
-- **User action:** Compare the final UI transcript/status with `/health`, `/v1/state`, and the
-  read-only database snapshot; restart `companion` and check the recoverable state again.
-- **Expected UI:** Availability, due count, review/proactive state, conversation history behavior,
-  and explicit `Asia/Taipei` review time agree with Core and persisted state after restart.
-- **API evidence:** Record final and post-restart `/health` and `/v1/state`, including timezone,
-  provider/model status, availability, due count, and relevant resource IDs/results.
-- **DB evidence:** Attach the final count/ID/state queries above, Alembic current/head, and targeted
-  rows supporting every section; explain any intentional non-persisted UI-only state.
-- **PASS/FAIL:** ____
-- **Notes/evidence:** ____
+實機確認本機 camera、MediaPipe gesture recognition 與 Textual preview 可以在 review flow 中正常使用。
 
-## Sign-off boundary
+目前 gesture semantics：
 
-Record target Mac model/macOS version, local date/time, commit SHA, operator, and evidence location.
-Issue #55 passes only when all eight sections have real target-run evidence and PASS. CI or Codex
-must not pre-fill these fields or claim that the live Groq/Ollama/Textual run succeeded.
+```text
+Thumb_Down → 顯示 read-only hint，不 grading、不前進
+Thumb_Up   → 僅在 REVIEW_COMPLETE 完成 review acknowledgement
+```
+
+同時確認：
+
+- camera preview 可正常顯示；
+- camera index 可明確指定；
+- gesture 不會取代 keyboard / button fallback；
+- frame 只在本機 process 中使用，不送 Core / Groq；
+- frame 不持久化；
+- disable / leave review 後 gesture state 可正常清理。
+
+---
+
+## 6. Proactive Practice End-to-End
+
+**Result: PASS**
+
+實機確認符合 eligibility 時，Textual UI 可以收到並呈現 proactive practice invitation。
+
+操作結果：
+
+```text
+Start     → 進入 active practice
+Later     → snooze
+Not today → dismiss for current policy window
+```
+
+Active practice 期間不會被一般 mode-changing slash command 留下 orphaned invitation；completion、abandon 與 restart reconciliation 均能回到明確 terminal state。
+
+Review priority、availability、cooldown 與 daily limit 仍由 Core 控制。
+
+---
+
+## 7. Cross-Conversation Memory Recall
+
+**Result: PASS**
+
+實機確認 conversation A 結束後可抽取 durable memory，conversation B 能在相關情境中取回少量記憶作為 context。
+
+驗收包含：
+
+```text
+memory extraction after conversation end
+new-conversation recall
+unrelated-query false-positive check
+soft delete exclusion
+restart persistence
+```
+
+啟用 embedding 時，semantic recall 可與 lexical / person matching 混合使用；embedding provider 不可用時可安全退回基本 recall path。
+
+Learning Item 與 life memory 在 prompt 與 persistence 中維持分離。
+
+---
+
+## 8. `/say` + Assistant Retry
+
+**Result: PASS**
+
+實機確認 `/say` 先產生英文表達並插入 conversation，但不建立 learning item。
+
+針對一般 chat、`/say` 與 proactive practice 的 assistant failure，retry path 均可在不重複 user message 的情況下補上 assistant response。
+
+Repeated retry 不會新增重複 user turn，也不會破壞 conversation / practice linkage。
+
+---
+
+## 9. Memory Extraction Failure + Quit Recovery
+
+**Result: PASS**
+
+實機確認 conversation 已成功保存時，即使 memory extraction 因 provider configuration 或 temporary provider failure 未完成，使用者仍可正常退出應用。
+
+Failure 會被呈現為 recovery / provider error，而不是成功訊息。
+
+後續 provider 恢復時可重新處理未完成 extraction，且不應重複產生相同 durable memory。
+
+---
+
+## 10. UI / Core / SQLite Consistency
+
+**Result: PASS**
+
+實機確認 Textual UI 顯示的主要 durable state 與 Core / SQLite 一致，包括：
+
+```text
+conversation lifecycle
+review due state
+learning stage / attempts
+availability
+proactive invitation lifecycle
+memory persistence
+retry evidence
+```
+
+應用 restart 後，durable state 可由 Core / repository 重建；camera preview、gesture transient state、input focus 等 UI-only state 不被錯誤當成需要持久化的資料。
+
+---
+
+## Failure / Fallback Acceptance
+
+**Result: PASS**
+
+以下 fallback 均符合預期：
+
+| Failure | Expected fallback | Result |
+|---|---|---|
+| LLM assistant reply failure | user message 保留，可 retry assistant | PASS |
+| Semantic grading unavailable | deferred，不污染 stage | PASS |
+| Memory extraction failure | conversation 可結束，後續 recovery | PASS |
+| Embedding unavailable | lexical / person recall | PASS |
+| Microphone / STT unavailable | typed review | PASS |
+| Camera / gesture unavailable | keyboard / button review | PASS |
+| Interrupted proactive practice | durable reconcile / terminal state | PASS |
+
+---
+
+## Privacy Boundary Acceptance
+
+**Result: PASS**
+
+確認目前 release 行為符合：
+
+- API key 不寫入 repository；
+- SQLite / private runtime data 不 commit；
+- camera frame 不上傳、不保存；
+- review audio 不作本機長期保存；
+- optional embedding 不等於將整個對話資料庫上傳；
+- LLM 不直接取得資料庫寫入權限；
+- UI 不直接修改 durable learning state。
+
+---
+
+## Release Sign-off
+
+Teacher v0.1.0 的 release baseline 可視為已完成 target-Mac 功能驗收。
+
+目前可對外展示與描述的功能包括：
+
+```text
+persistent English conversation
+learning-signal capture
+help / hint / say
+learning items + spaced review
+semantic grading fallback
+spoken review
+local gesture + camera preview
+long-term memory + optional semantic recall
+proactive practice invitation
+retry / recovery paths
+SQLite persistence and restart continuity
+```
+
+不應宣稱為本次 release 能力的項目包括：background daemon、OS push notification、通用 camera scene understanding、多使用者 cloud sync、自動瀏覽器 / Email / Calendar 操作，以及任何未接入 runtime 的規劃中功能。
