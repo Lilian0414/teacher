@@ -99,6 +99,7 @@ class LearningService:
         request: LearningSignalRequest,
         candidate: LearningSignalCandidate | None,
         observation: LearningSignalObservation | None = None,
+        commit: bool = True,
     ) -> LearningItemSchema | None:
         if self._is_chitchat(request.user_content):
             return None
@@ -132,6 +133,7 @@ class LearningService:
             acceptance_reason=candidate.reason.value,
             now=captured_at,
             first_review_at=captured_at + CONVERSATION_FIRST_REVIEW_DELAY,
+            commit=commit,
         )
         item = self._repository.get_item(occurrence.learning_item_id, user_id=self._user_id)
         assert item is not None

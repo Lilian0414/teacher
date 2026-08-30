@@ -9,7 +9,13 @@ from uuid import uuid4
 from sqlalchemy import CursorResult, Select, or_, select, update
 from sqlalchemy.orm import Session
 
-from companion.learning.schemas import LearningSignalExtraction, LearningSignalRequest
+from companion.learning.schemas import (
+    LearningItemSchema,
+    LearningSignalCandidate,
+    LearningSignalExtraction,
+    LearningSignalObservation,
+    LearningSignalRequest,
+)
 from companion.learning.service import LearningService
 from companion.persistence.models import LearningSignalProcessing, Message
 from companion.persistence.repositories import encode_dt
@@ -126,20 +132,29 @@ class LearningSignalProcessor:
         try:
             result = await self._provider.extract_learning_signal(request)
             item = None
+            extraction: LearningSignalExtraction | None = None
+            candidate: LearningSignalCandidate | None = None
             if isinstance(result, LearningSignalExtraction):
-                item = self._learning.capture_conversation_signal(
-                    request=request, candidate=result.candidate, observation=result.observation
+                extraction = result
+                candidate = result.candidate
+            else:
+                candidate = result
+            if result is not None:
+                item = self._capture_if_owned(
+                    row,
+                    claim_token=claim_token,
+                    now=now,
+                    request=request,
+                    candidate=candidate,
+                    observation=extraction.observation if extraction else None,
                 )
-            elif result is not None:
-                item = self._learning.capture_conversation_signal(request=request, candidate=result)
-            self._finish(
-                row,
-                claim_token=claim_token,
-                now=now,
-                status="completed" if item is not None else "no_candidate",
-                retryable=False,
-                detail=None,
-            )
+                if item is None and not self._owns_claim(row.user_message_id, claim_token):
+                    return
+            if item is None:
+                self._finish(
+                    row, claim_token=claim_token, now=now, status="no_candidate",
+                    retryable=False, detail=None
+                )
         except asyncio.CancelledError:
             retryable = row.attempts < MAX_ATTEMPTS
             self._finish(
@@ -218,3 +233,54 @@ class LearningSignalProcessor:
             )
         )
         self._session.commit()
+
+    def _owns_claim(self, user_message_id: str, claim_token: str) -> bool:
+        return self._session.scalar(
+            select(LearningSignalProcessing.user_message_id).where(
+                LearningSignalProcessing.user_message_id == user_message_id,
+                LearningSignalProcessing.status == "in_flight",
+                LearningSignalProcessing.claim_token == claim_token,
+            )
+        ) is not None
+
+    def _capture_if_owned(
+        self,
+        row: LearningSignalProcessing,
+        *,
+        claim_token: str,
+        now: datetime,
+        request: LearningSignalRequest,
+        candidate: LearningSignalCandidate | None,
+        observation: LearningSignalObservation | None,
+    ) -> LearningItemSchema | None:
+        """Atomically gate the learning effect and terminal transition on claim ownership."""
+        result = self._session.execute(
+            update(LearningSignalProcessing)
+            .where(
+                LearningSignalProcessing.user_message_id == row.user_message_id,
+                LearningSignalProcessing.status == "in_flight",
+                LearningSignalProcessing.claim_token == claim_token,
+            )
+            .values(
+                status="completed", retryable=False, status_detail=None,
+                claim_token=None, lease_expires_at=None, completed_at=encode_dt(now),
+            )
+        )
+        assert isinstance(result, CursorResult)
+        if result.rowcount != 1:
+            self._session.rollback()
+            return None
+        item = self._learning.capture_conversation_signal(
+            request=request,
+            candidate=candidate,
+            observation=observation,
+            commit=False,
+        )
+        if item is None:
+            self._session.execute(
+                update(LearningSignalProcessing)
+                .where(LearningSignalProcessing.user_message_id == row.user_message_id)
+                .values(status="no_candidate")
+            )
+        self._session.commit()
+        return item

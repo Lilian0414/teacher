@@ -80,6 +80,7 @@ class LearningRepository:
         acceptance_reason: str,
         now: datetime,
         first_review_at: datetime,
+        commit: bool = True,
     ) -> LearningOccurrence:
         existing = self.occurrence_for_user_message(user_message_id)
         if existing is not None:
@@ -105,8 +106,11 @@ class LearningRepository:
                 created_at=encode_dt(now),
             )
             self._session.add(occurrence)
-            self._session.commit()
-            self._session.refresh(occurrence)
+            if commit:
+                self._session.commit()
+                self._session.refresh(occurrence)
+            else:
+                self._session.flush()
             return occurrence
         except IntegrityError:
             self._session.rollback()

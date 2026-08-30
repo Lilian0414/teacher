@@ -398,11 +398,10 @@ async def create_conversation(
     memory_service: MemoryService = MemoryDependency,
 ) -> CreateConversationResponse:
     try:
-        await asyncio.wait_for(
-            conversation_service.recover_learning_signals(limit=3), timeout=0.05
-        )
+        recovery = asyncio.create_task(conversation_service.recover_learning_signals(limit=3))
+        await asyncio.wait_for(asyncio.shield(recovery), timeout=0.05)
     except TimeoutError:
-        # The durable ledger preserves unfinished work for a later bounded wakeup.
+        # The request is bounded while the owned recovery continues in the background.
         pass
     for recoverable in conversation_service.recover_interrupted_conversations():
         await memory_service.extract_conversation(recoverable.id)

@@ -211,11 +211,19 @@ class ProactiveService:
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
         )
-        outcome = (
-            PracticeOutcome.LEARNING_SIGNAL_CAPTURED
-            if occurrence
-            else PracticeOutcome.COMPLETED_NOT_EVALUATED
-        )
+        processing = self._repository.processing_state(user_message_id)
+        if occurrence:
+            outcome = PracticeOutcome.LEARNING_SIGNAL_CAPTURED
+        elif processing is not None and processing.status == "no_candidate":
+            outcome = PracticeOutcome.COMPLETED_NO_SIGNAL
+        elif (
+            processing is not None
+            and processing.status == "failed"
+            and not processing.retryable
+        ):
+            outcome = PracticeOutcome.EVALUATION_FAILED
+        else:
+            outcome = PracticeOutcome.COMPLETED_NOT_EVALUATED
         if not self._repository.finish_practice(
             row,
             status=InvitationStatus.COMPLETED,

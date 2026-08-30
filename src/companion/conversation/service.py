@@ -170,7 +170,7 @@ class ConversationService:
         if len(later) == 1 and later[0].role == MessageRole.ASSISTANT.value:
             task = asyncio.create_task(self.recover_learning_signals(limit=1))
             self._signal_tasks.add(task)
-            task.add_done_callback(self._signal_tasks.discard)
+            task.add_done_callback(self._on_signal_task_done)
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=0.01)
             except TimeoutError:
@@ -213,7 +213,7 @@ class ConversationService:
                 self._signal_processor.process(processing, now=self._clock())
             )
             self._signal_tasks.add(task)
-            task.add_done_callback(self._signal_tasks.discard)
+            task.add_done_callback(self._on_signal_task_done)
             try:
                 # Preserve the historical immediate result for fast local extraction while
                 # strictly bounding provider latency on the successful chat path.
@@ -234,9 +234,14 @@ class ConversationService:
         rows = self._signal_processor.recoverable(now=self._clock(), limit=limit)
         for row in rows:
             await self._signal_processor.process(row, now=self._clock())
-        if rows and self._practice_reconciler is not None:
+        if self._practice_reconciler is not None:
             self._practice_reconciler()
         return len(rows)
+
+    def _on_signal_task_done(self, task: asyncio.Task[object]) -> None:
+        self._signal_tasks.discard(task)
+        if not task.cancelled() and self._practice_reconciler is not None:
+            self._practice_reconciler()
 
     async def insert_translated_user_message(
         self,

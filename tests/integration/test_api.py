@@ -1,6 +1,8 @@
+import asyncio
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +13,7 @@ from companion.api.dependencies import (
     get_llm_provider,
     get_speech_transcriber,
 )
+from companion.api.routes import create_conversation
 from companion.availability import AvailabilityService
 from companion.learning import LearningRepository, LearningService
 from companion.learning.schemas import LearningKind
@@ -19,6 +22,7 @@ from companion.persistence.database import Base, make_engine
 from companion.persistence.models import LearningAttempt, LearningItem
 from companion.persistence.repositories import AvailabilityRepository
 from companion.providers.fake import FakeLLMProvider
+from companion.schemas.conversation import ConversationSchema, MemoryExtractionStatus
 
 
 class FakeTranscriber:
@@ -26,6 +30,51 @@ class FakeTranscriber:
         assert audio == b"wave"
         assert content_type == "audio/wav"
         return "I fell asleep."
+
+
+@pytest.mark.asyncio
+async def test_create_route_bounds_slow_recovery_without_cancelling_it() -> None:
+    release = asyncio.Event()
+    recovered = asyncio.Event()
+
+    class ConversationStub:
+        async def recover_learning_signals(self, *, limit: int) -> int:
+            assert limit == 3
+            await release.wait()
+            recovered.set()
+            return 1
+
+        def recover_interrupted_conversations(self) -> list[ConversationSchema]:
+            return []
+
+        def create_conversation(self) -> ConversationSchema:
+            return ConversationSchema(
+                id="new-conversation",
+                user_id="default",
+                mode="normal",
+                private_mode=False,
+                started_at=datetime(2026, 8, 30, tzinfo=UTC),
+                ended_at=None,
+                memory_extraction_status=MemoryExtractionStatus.PENDING,
+                memory_extraction_attempts=0,
+                memory_extraction_error=None,
+                memory_extracted_at=None,
+                messages=[],
+            )
+
+    class MemoryStub:
+        async def extract_conversation(self, conversation_id: str) -> None:
+            raise AssertionError(conversation_id)
+
+    response = await asyncio.wait_for(
+        create_conversation(ConversationStub(), MemoryStub()),  # type: ignore[arg-type]
+        timeout=0.1,
+    )
+    assert response.id == "new-conversation"
+    assert not recovered.is_set()
+
+    release.set()
+    await asyncio.wait_for(recovered.wait(), timeout=0.1)
 
 
 def test_speech_transcription_endpoint_is_core_owned_and_non_mutating() -> None:
