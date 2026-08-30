@@ -79,7 +79,7 @@ class ConversationService:
         )
         self._practice_reconciler = practice_reconciler
         self._correction_style = correction_style or (lambda: "normal")
-        self._signal_tasks: set[asyncio.Task[None]] = set()
+        self._signal_tasks: set[asyncio.Task[object]] = set()
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -168,7 +168,13 @@ class ConversationService:
         if not later:
             return await self._reply_to_user_message(target)
         if len(later) == 1 and later[0].role == MessageRole.ASSISTANT.value:
-            await self.recover_learning_signals(limit=1)
+            task = asyncio.create_task(self.recover_learning_signals(limit=1))
+            self._signal_tasks.add(task)
+            task.add_done_callback(self._signal_tasks.discard)
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=0.01)
+            except TimeoutError:
+                pass
             return SendMessageResult(
                 user_message=self._message_schema(target),
                 assistant_message=self._message_schema(later[0]),
@@ -225,7 +231,7 @@ class ConversationService:
         """Process a bounded durable batch without regenerating assistant replies."""
         if self._signal_processor is None:
             return 0
-        rows = self._signal_processor.recoverable(limit=limit)
+        rows = self._signal_processor.recoverable(now=self._clock(), limit=limit)
         for row in rows:
             await self._signal_processor.process(row, now=self._clock())
         if rows and self._practice_reconciler is not None:

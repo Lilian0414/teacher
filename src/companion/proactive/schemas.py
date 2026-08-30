@@ -25,6 +25,8 @@ class InvitationStatus(StrEnum):
 class PracticeOutcome(StrEnum):
     LEARNING_SIGNAL_CAPTURED = "learning_signal_captured"
     COMPLETED_NOT_EVALUATED = "completed_not_evaluated"
+    COMPLETED_NO_SIGNAL = "completed_no_signal"
+    EVALUATION_FAILED = "evaluation_failed"
     ABANDONED = "abandoned"
 
 

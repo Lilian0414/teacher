@@ -73,6 +73,11 @@ class ProactiveRepository:
         self._session.commit()
         self._session.refresh(row)
 
+    def set_practice_outcome(self, row: ProactiveInvitation, outcome: str) -> None:
+        row.outcome = outcome
+        self._session.commit()
+        self._session.refresh(row)
+
     def get(self, invitation_id: str, user_id: str) -> ProactiveInvitation | None:
         return self._session.scalar(
             select(ProactiveInvitation).where(

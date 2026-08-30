@@ -83,9 +83,13 @@ async def test_slow_signal_is_durable_pending_and_recovers_without_new_reply() -
         assert result.assistant_message is not None
         processing = session.get(LearningSignalProcessing, result.user_message.id)
         assert processing is not None
-        assert processing.status == "pending"
+        assert processing.status == "in_flight"
         assert processing.attempts == 1
         assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
+
+        # A concurrent recovery wakeup cannot claim the leased turn again.
+        assert await service.recover_learning_signals() == 0
+        assert provider.learning_signal_requests == []
 
         provider.release.set()
         await asyncio.sleep(0)
@@ -94,6 +98,70 @@ async def test_slow_signal_is_durable_pending_and_recovers_without_new_reply() -
         assert processing.status == "completed"
         assert len(learning_repository.occurrences()) == 1
         assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_cancellation_at_max_attempt_is_terminal_not_stranded() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = SlowSignalProvider()
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=LearningRepository(session)),
+        )
+        conversation = service.create_conversation()
+        result = await service.send_user_message(
+            conversation_id=conversation.id, content="Today was exhausting."
+        )
+        processing = session.get(LearningSignalProcessing, result.user_message.id)
+        assert processing is not None
+        processing.status = "failed"
+        processing.attempts = 2
+        processing.claim_token = None
+        processing.lease_expires_at = None
+        session.commit()
+
+        recovery = asyncio.create_task(service.recover_learning_signals())
+        await asyncio.sleep(0)
+        recovery.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await recovery
+
+        session.refresh(processing)
+        assert processing.status == "failed"
+        assert processing.attempts == 3
+        assert processing.retryable is False
+        assert processing.claim_token is None
+        assert await service.recover_learning_signals() == 0
+
+
+@pytest.mark.asyncio
+async def test_slow_extraction_does_not_block_duplicate_reply_path() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = SlowSignalProvider()
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=LearningRepository(session)),
+        )
+        conversation = service.create_conversation()
+        result = await service.send_user_message(
+            conversation_id=conversation.id, content="Today was exhausting."
+        )
+
+        retried = await asyncio.wait_for(
+            service.retry_assistant_reply(
+                conversation_id=conversation.id, user_message_id=result.user_message.id
+            ),
+            timeout=0.1,
+        )
+        assert retried.assistant_message == result.assistant_message
+        assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
+        provider.release.set()
 
 
 @pytest.mark.asyncio

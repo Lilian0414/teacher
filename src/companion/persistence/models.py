@@ -166,6 +166,8 @@ class LearningSignalProcessing(Base):
     status_detail: Mapped[str | None] = mapped_column(String(160), nullable=True)
     created_at: Mapped[str] = mapped_column(String(40))
     last_attempted_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
 

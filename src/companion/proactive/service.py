@@ -256,6 +256,8 @@ class ProactiveService:
                 "failed",
             }:
                 continue
+            if processing.status == "failed" and processing.retryable:
+                continue
             occurrence = self._repository.validated_practice_evidence(
                 user_id=self._settings.user_id,
                 conversation_id=row.conversation_id or "",
@@ -264,6 +266,16 @@ class ProactiveService:
             )
             if occurrence is not None:
                 self._repository.attach_practice_occurrence(row, occurrence)
+                resolved.append(self._schema(row))
+            elif processing.status == "no_candidate":
+                self._repository.set_practice_outcome(
+                    row, PracticeOutcome.COMPLETED_NO_SIGNAL.value
+                )
+                resolved.append(self._schema(row))
+            elif processing.status == "failed":
+                self._repository.set_practice_outcome(
+                    row, PracticeOutcome.EVALUATION_FAILED.value
+                )
                 resolved.append(self._schema(row))
         for row in self._repository.accepted_conversations(self._settings.user_id):
             messages = []
