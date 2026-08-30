@@ -45,6 +45,27 @@ class SlowSignalProvider(BoundSignalProvider):
         return await super().extract_learning_signal(request)
 
 
+class ExpiringSignalProvider(RecordingLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_first = asyncio.Event()
+        self.calls = 0
+
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate | None:
+        self.calls += 1
+        if self.calls == 1:
+            await self.release_first.wait()
+            self.learning_signal_requests.append(request)
+            return _candidate(
+                conversation_id=request.conversation_id,
+                user_id=request.user_message_id,
+                assistant_id=request.assistant_message_id,
+            )
+        return None
+
+
 def _candidate(
     *,
     conversation_id: str = "offered-later",
@@ -99,6 +120,45 @@ async def test_slow_signal_is_durable_pending_and_recovers_without_new_reply() -
         assert len(learning_repository.occurrences()) == 1
         assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
 
+
+@pytest.mark.asyncio
+async def test_expired_owner_cannot_capture_or_terminalize_before_reclaim() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    with Session(engine) as session:
+        provider = ExpiringSignalProvider()
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+            clock=lambda: now,
+        )
+        conversation = service.create_conversation()
+
+        result = await service.send_user_message(
+            conversation_id=conversation.id, content="Today was exhausting."
+        )
+        processing = session.get(LearningSignalProcessing, result.user_message.id)
+        assert processing is not None
+        original_token = processing.claim_token
+
+        now += timedelta(minutes=6)
+        provider.release_first.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        session.refresh(processing)
+        assert processing.status == "in_flight"
+        assert processing.claim_token == original_token
+        assert learning_repository.occurrences() == []
+
+        assert await service.recover_learning_signals() == 1
+        session.refresh(processing)
+        assert processing.status == "no_candidate"
+        assert processing.attempts == 2
+        assert learning_repository.occurrences() == []
 
 @pytest.mark.asyncio
 async def test_cancellation_at_max_attempt_is_terminal_not_stranded() -> None:

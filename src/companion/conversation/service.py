@@ -73,7 +73,7 @@ class ConversationService:
         self._learning_context_builder = learning_context_builder
         self._learning_service = learning_service
         self._signal_processor = (
-            LearningSignalProcessor(repository.session, llm_provider, learning_service)
+            LearningSignalProcessor(repository.session, llm_provider, learning_service, clock)
             if learning_service is not None
             else None
         )

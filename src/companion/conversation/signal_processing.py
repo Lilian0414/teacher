@@ -9,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy import CursorResult, Select, or_, select, update
 from sqlalchemy.orm import Session
 
+from companion.clock import Clock, system_clock
 from companion.learning.schemas import (
     LearningItemSchema,
     LearningSignalCandidate,
@@ -33,10 +34,17 @@ LEASE_DURATION = timedelta(minutes=5)
 class LearningSignalProcessor:
     """Own durable, bounded, idempotent post-conversation signal processing."""
 
-    def __init__(self, session: Session, provider: LLMProvider, learning: LearningService) -> None:
+    def __init__(
+        self,
+        session: Session,
+        provider: LLMProvider,
+        learning: LearningService,
+        clock: Clock = system_clock,
+    ) -> None:
         self._session = session
         self._provider = provider
         self._learning = learning
+        self._clock = clock
 
     def enqueue(
         self, *, user: Message, assistant: Message, now: datetime
@@ -217,29 +225,35 @@ class LearningSignalProcessor:
         retryable: bool,
         detail: str | None,
     ) -> None:
+        finished_at = self._clock()
         self._session.execute(
             update(LearningSignalProcessing)
             .where(
                 LearningSignalProcessing.user_message_id == row.user_message_id,
                 LearningSignalProcessing.status == "in_flight",
                 LearningSignalProcessing.claim_token == claim_token,
+                LearningSignalProcessing.lease_expires_at > encode_dt(finished_at),
             )
             .values(
                 status=status, retryable=retryable, status_detail=detail,
                 claim_token=None, lease_expires_at=None,
                 completed_at=(
-                    encode_dt(now) if status in TERMINAL_STATUSES and not retryable else None
+                    encode_dt(finished_at)
+                    if status in TERMINAL_STATUSES and not retryable
+                    else None
                 ),
             )
         )
         self._session.commit()
 
     def _owns_claim(self, user_message_id: str, claim_token: str) -> bool:
+        checked_at = self._clock()
         return self._session.scalar(
             select(LearningSignalProcessing.user_message_id).where(
                 LearningSignalProcessing.user_message_id == user_message_id,
                 LearningSignalProcessing.status == "in_flight",
                 LearningSignalProcessing.claim_token == claim_token,
+                LearningSignalProcessing.lease_expires_at > encode_dt(checked_at),
             )
         ) is not None
 
@@ -254,16 +268,18 @@ class LearningSignalProcessor:
         observation: LearningSignalObservation | None,
     ) -> LearningItemSchema | None:
         """Atomically gate the learning effect and terminal transition on claim ownership."""
+        committed_at = self._clock()
         result = self._session.execute(
             update(LearningSignalProcessing)
             .where(
                 LearningSignalProcessing.user_message_id == row.user_message_id,
                 LearningSignalProcessing.status == "in_flight",
                 LearningSignalProcessing.claim_token == claim_token,
+                LearningSignalProcessing.lease_expires_at > encode_dt(committed_at),
             )
             .values(
                 status="completed", retryable=False, status_detail=None,
-                claim_token=None, lease_expires_at=None, completed_at=encode_dt(now),
+                claim_token=None, lease_expires_at=None, completed_at=encode_dt(committed_at),
             )
         )
         assert isinstance(result, CursorResult)
