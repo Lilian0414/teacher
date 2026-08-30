@@ -1,11 +1,12 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from companion.clock import Clock, system_clock
 from companion.conversation.repository import ConversationRepository
+from companion.conversation.signal_processing import LearningSignalProcessor
 from companion.input_policy import BLOCKED_INPUT_SOURCE, ENGLISH_INPUT_REDIRECT, is_materially_han
 from companion.learning.context import LearningContextBuilder
-from companion.learning.schemas import LearningSignalExtraction, LearningSignalRequest
 from companion.learning.service import LearningService
 from companion.memory.context import MemoryContextBuilder
 from companion.persistence.models import Conversation, Message
@@ -71,8 +72,14 @@ class ConversationService:
         self._memory_context_builder = memory_context_builder
         self._learning_context_builder = learning_context_builder
         self._learning_service = learning_service
+        self._signal_processor = (
+            LearningSignalProcessor(repository.session, llm_provider, learning_service)
+            if learning_service is not None
+            else None
+        )
         self._practice_reconciler = practice_reconciler
         self._correction_style = correction_style or (lambda: "normal")
+        self._signal_tasks: set[asyncio.Task[None]] = set()
 
     def create_conversation(self) -> ConversationSchema:
         conversation = self._repository.create_conversation(
@@ -161,6 +168,7 @@ class ConversationService:
         if not later:
             return await self._reply_to_user_message(target)
         if len(later) == 1 and later[0].role == MessageRole.ASSISTANT.value:
+            await self.recover_learning_signals(limit=1)
             return SendMessageResult(
                 user_message=self._message_schema(target),
                 assistant_message=self._message_schema(later[0]),
@@ -191,29 +199,20 @@ class ConversationService:
             source="terminal",
             created_at=self._clock(),
         )
-        if self._learning_service is not None and user_message.source == ORDINARY_CHAT_SOURCE:
-            request = LearningSignalRequest(
-                conversation_id=user_message.conversation_id,
-                user_message_id=user_message.id,
-                assistant_message_id=assistant_message.id,
-                user_content=user_message.content,
-                assistant_content=assistant_message.content,
+        if self._signal_processor is not None and user_message.source == ORDINARY_CHAT_SOURCE:
+            processing = self._signal_processor.enqueue(
+                user=user_message, assistant=assistant_message, now=self._clock()
             )
+            task = asyncio.create_task(
+                self._signal_processor.process(processing, now=self._clock())
+            )
+            self._signal_tasks.add(task)
+            task.add_done_callback(self._signal_tasks.discard)
             try:
-                result = await self._llm_provider.extract_learning_signal(request)
-                if isinstance(result, LearningSignalExtraction):
-                    self._learning_service.capture_conversation_signal(
-                        request=request,
-                        candidate=result.candidate,
-                        observation=result.observation,
-                    )
-                elif result is not None and not isinstance(result, LearningSignalExtraction):
-                    # Local/test provider compatibility; production extraction is evidence-first.
-                    self._learning_service.capture_conversation_signal(
-                        request=request, candidate=result
-                    )
-            except Exception:
-                # Learning extraction is best-effort post-processing; chat is already durable.
+                # Preserve the historical immediate result for fast local extraction while
+                # strictly bounding provider latency on the successful chat path.
+                await asyncio.wait_for(asyncio.shield(task), timeout=0.01)
+            except TimeoutError:
                 pass
         return SendMessageResult(
             user_message=self._message_schema(user_message),
@@ -221,6 +220,17 @@ class ConversationService:
             error=None,
             retryable=False,
         )
+
+    async def recover_learning_signals(self, *, limit: int = 5) -> int:
+        """Process a bounded durable batch without regenerating assistant replies."""
+        if self._signal_processor is None:
+            return 0
+        rows = self._signal_processor.recoverable(limit=limit)
+        for row in rows:
+            await self._signal_processor.process(row, now=self._clock())
+        if rows and self._practice_reconciler is not None:
+            self._practice_reconciler()
+        return len(rows)
 
     async def insert_translated_user_message(
         self,

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from companion.learning.schemas import (
     LearningSignalRequest,
 )
 from companion.persistence.database import Base, make_engine
+from companion.persistence.models import LearningSignalProcessing
 from companion.providers.errors import LLMInvalidResponseError, LLMTemporaryError
 from companion.providers.schemas import ChatRequest, ChatResponse
 from tests.support import RecordingLLMProvider
@@ -31,6 +33,18 @@ class BoundSignalProvider(RecordingLLMProvider):
         return candidate
 
 
+class SlowSignalProvider(BoundSignalProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def extract_learning_signal(
+        self, request: LearningSignalRequest
+    ) -> LearningSignalCandidate:
+        await self.release.wait()
+        return await super().extract_learning_signal(request)
+
+
 def _candidate(
     *,
     conversation_id: str = "offered-later",
@@ -46,6 +60,78 @@ def _candidate(
         accepted_answers=["I am exhausted."],
         reason=LearningSignalReason.USEFUL_EXPRESSION,
     )
+
+
+@pytest.mark.asyncio
+async def test_slow_signal_is_durable_pending_and_recovers_without_new_reply() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = SlowSignalProvider()
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+        )
+        conversation = service.create_conversation()
+
+        result = await service.send_user_message(
+            conversation_id=conversation.id, content="Today was exhausting."
+        )
+
+        assert result.assistant_message is not None
+        processing = session.get(LearningSignalProcessing, result.user_message.id)
+        assert processing is not None
+        assert processing.status == "pending"
+        assert processing.attempts == 1
+        assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
+
+        provider.release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        session.refresh(processing)
+        assert processing.status == "completed"
+        assert len(learning_repository.occurrences()) == 1
+        assert len(ConversationRepository(session).list_messages(conversation.id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_retryable_failure_is_sanitized_and_recovery_is_exactly_once() -> None:
+    engine = make_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        provider = RecordingLLMProvider()
+        provider.learning_signal_error = LLMTemporaryError("secret-provider-payload")
+        learning_repository = LearningRepository(session)
+        service = ConversationService(
+            repository=ConversationRepository(session),
+            llm_provider=provider,
+            learning_service=LearningService(repository=learning_repository),
+        )
+        conversation = service.create_conversation()
+        result = await service.send_user_message(
+            conversation_id=conversation.id, content="Today was exhausting."
+        )
+        processing = session.get(LearningSignalProcessing, result.user_message.id)
+        assert processing is not None
+        assert processing.status == "failed"
+        assert processing.retryable is True
+        assert "secret-provider-payload" not in (processing.status_detail or "")
+
+        provider.learning_signal_error = None
+        assert result.assistant_message is not None
+        provider.learning_signal = _candidate(
+            conversation_id=conversation.id,
+            user_id=result.user_message.id,
+            assistant_id=result.assistant_message.id,
+        )
+        assert await service.recover_learning_signals() == 1
+        assert await service.recover_learning_signals() == 0
+        session.refresh(processing)
+        assert processing.status == "completed"
+        assert processing.attempts == 2
+        assert len(learning_repository.occurrences()) == 1
 
 
 @pytest.mark.asyncio

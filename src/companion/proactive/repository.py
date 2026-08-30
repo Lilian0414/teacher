@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from companion.persistence.models import (
     Conversation,
     LearningOccurrence,
+    LearningSignalProcessing,
     Message,
     ProactiveInvitation,
 )
@@ -48,6 +49,29 @@ class ProactiveRepository:
                 .order_by(ProactiveInvitation.responded_at.asc())
             )
         )
+
+    def practices_awaiting_evaluation(self, user_id: str) -> list[ProactiveInvitation]:
+        return list(
+            self._session.scalars(
+                select(ProactiveInvitation).where(
+                    ProactiveInvitation.user_id == user_id,
+                    ProactiveInvitation.status == InvitationStatus.COMPLETED.value,
+                    ProactiveInvitation.outcome == "completed_not_evaluated",
+                )
+            )
+        )
+
+    def processing_state(self, user_message_id: str) -> LearningSignalProcessing | None:
+        return self._session.get(LearningSignalProcessing, user_message_id)
+
+    def attach_practice_occurrence(
+        self, row: ProactiveInvitation, occurrence: LearningOccurrence
+    ) -> None:
+        row.outcome = "learning_signal_captured"
+        row.learning_occurrence_id = occurrence.id
+        row.learning_item_id = occurrence.learning_item_id
+        self._session.commit()
+        self._session.refresh(row)
 
     def get(self, invitation_id: str, user_id: str) -> ProactiveInvitation | None:
         return self._session.scalar(

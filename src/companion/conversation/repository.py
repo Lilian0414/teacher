@@ -13,6 +13,10 @@ class ConversationRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    @property
+    def session(self) -> Session:
+        return self._session
+
     def create_conversation(self, *, user_id: str, started_at: datetime) -> Conversation:
         conversation = Conversation(
             id=str(uuid4()),

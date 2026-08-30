@@ -246,6 +246,25 @@ class ProactiveService:
     def reconcile_accepted_practices(self) -> list[InvitationSchema]:
         """Resolve stale accepted practice using only one exact post-acceptance turn."""
         resolved: list[InvitationSchema] = []
+        for row in self._repository.practices_awaiting_evaluation(self._settings.user_id):
+            if row.user_message_id is None or row.assistant_message_id is None:
+                continue
+            processing = self._repository.processing_state(row.user_message_id)
+            if processing is None or processing.status not in {
+                "completed",
+                "no_candidate",
+                "failed",
+            }:
+                continue
+            occurrence = self._repository.validated_practice_evidence(
+                user_id=self._settings.user_id,
+                conversation_id=row.conversation_id or "",
+                user_message_id=row.user_message_id,
+                assistant_message_id=row.assistant_message_id,
+            )
+            if occurrence is not None:
+                self._repository.attach_practice_occurrence(row, occurrence)
+                resolved.append(self._schema(row))
         for row in self._repository.accepted_conversations(self._settings.user_id):
             messages = []
             if (

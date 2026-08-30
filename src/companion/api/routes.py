@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -396,6 +397,13 @@ async def create_conversation(
     conversation_service: ConversationService = ConversationDependency,
     memory_service: MemoryService = MemoryDependency,
 ) -> CreateConversationResponse:
+    try:
+        await asyncio.wait_for(
+            conversation_service.recover_learning_signals(limit=3), timeout=0.05
+        )
+    except TimeoutError:
+        # The durable ledger preserves unfinished work for a later bounded wakeup.
+        pass
     for recoverable in conversation_service.recover_interrupted_conversations():
         await memory_service.extract_conversation(recoverable.id)
     conversation = conversation_service.create_conversation()

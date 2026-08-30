@@ -146,6 +146,29 @@ class LearningOccurrence(Base):
     created_at: Mapped[str] = mapped_column(String(40))
 
 
+class LearningSignalProcessing(Base):
+    """Durable extraction ledger for one persisted conversation turn."""
+
+    __tablename__ = "learning_signal_processing"
+
+    user_message_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id"), primary_key=True
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("conversations.id"), index=True
+    )
+    assistant_message_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id"), unique=True
+    )
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=True)
+    status_detail: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    last_attempted_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
 class ProactiveInvitation(Base):
     __tablename__ = "proactive_invitations"
     __table_args__ = (
