@@ -321,7 +321,7 @@ async def test_restart_reconciliation_is_exact_deterministic_and_idempotent() ->
     assert reconciled.conversation_id == complete_conversation.id
     assert reconciled.user_message_id == turn.user_message.id
     assert reconciled.assistant_message_id == turn.assistant_message.id
-    assert reconciled.outcome == "completed_not_evaluated"
+    assert reconciled.outcome == "completed_no_signal"
     assert service.reconcile_accepted_practices() == []
     assert session.query(LearningOccurrence).count() == 0
 
