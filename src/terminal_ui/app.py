@@ -85,6 +85,8 @@ class CompanionTerminal(App[None]):
         display: none;
         color: $accent;
         text-style: bold;
+        border: none;
+        padding: 0;
     }
     #actions {
         height: 3;
@@ -154,7 +156,7 @@ class CompanionTerminal(App[None]):
         )
         self._status = Static("Teacher is getting ready…", id="status")
         self._messages = RichLog(id="messages", wrap=True, markup=False, auto_scroll=False)
-        self._new_messages = Static("↓ New messages — End: jump to latest", id="new-messages")
+        self._new_messages = Button("↓ New messages — End: jump to latest", id="new-messages")
         self._input = Input(
             placeholder="Say something...",
             id="command",
@@ -648,6 +650,9 @@ class CompanionTerminal(App[None]):
             self._write_message("Cancelled.")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "new-messages":
+            self.action_transcript_latest()
+            return
         if event.button.id == "review-hint":
             item_id = self._active_review_item_id
             if not self._waiting and self._mode == InteractionMode.REVIEW and item_id is not None:
@@ -1133,7 +1138,7 @@ class CompanionTerminal(App[None]):
             role = MessageRole.HINT
         else:
             role = None
-        self._write_message(self._format_command_result(result), role)
+        self._write_command_result(result, role)
         command = result.get("command")
         if command in {"busy", "dnd", "available", "status"} and result.get("ok"):
             status = await self._fetch_proactive_status()
@@ -1556,6 +1561,26 @@ class CompanionTerminal(App[None]):
                 return f"{CompanionTerminal._format_memory(memory)}\n{payload.get('message')}"
             return str(payload.get("message"))
         return str(payload.get("message", "Command completed."))
+
+    def _write_command_result(
+        self, payload: dict[str, Any], role: MessageRole | None = None
+    ) -> None:
+        """Render command output as semantic messages, including mixed-role results."""
+        if payload.get("command") != "say":
+            self._write_message(self._format_command_result(payload), role)
+            return
+
+        inserted = payload.get("inserted_text")
+        if inserted:
+            self._write_message(str(inserted), MessageRole.USER)
+        assistant = payload.get("assistant_message")
+        if isinstance(assistant, dict) and assistant.get("content") is not None:
+            self._write_message(str(assistant["content"]), MessageRole.ASSISTANT)
+        assistant_error = payload.get("assistant_error")
+        if assistant_error:
+            self._write_message(f"Assistant reply failed: {assistant_error}", MessageRole.ERROR)
+        if not inserted and assistant is None and not assistant_error:
+            self._write_message(str(payload.get("message", "Sent.")), role)
 
     @staticmethod
     def _format_help(payload: dict[str, Any]) -> str:

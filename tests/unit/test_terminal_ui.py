@@ -1342,8 +1342,10 @@ async def test_say_partial_retry_preserves_evidence_until_assistant_succeeds() -
         "user_message_id": "user-1",
     }
     messages = cast(MessageSink, terminal._messages).values
-    assert "You said: I am tired today." in messages[-1]
-    assert "Assistant reply failed: Assistant unavailable" in messages[-1]
+    assert render(messages[-2]) == "You: I am tired today."
+    assert "magenta" in str(messages[-2].style)
+    assert render(messages[-1]) == "Error: Assistant reply failed: Assistant unavailable"
+    assert "red" in str(messages[-1].style)
 
     await terminal._retry_assistant_reply()
     assert terminal._pending_assistant_retry is not None
@@ -2273,6 +2275,25 @@ def test_semantic_message_roles_keep_text_cues_and_colors(
     assert style in str(written.style)
 
 
+def test_say_result_renders_distinct_semantic_user_and_assistant_messages() -> None:
+    terminal = make_terminal()
+
+    terminal._write_command_result(
+        {
+            "command": "say",
+            "ok": True,
+            "inserted_text": "I skipped class today.",
+            "assistant_message": {"content": "That happens sometimes."},
+        }
+    )
+
+    user, assistant = cast(MessageSink, terminal._messages).values
+    assert render(user) == "You: I skipped class today."
+    assert "magenta" in str(user.style)
+    assert render(assistant) == "assistant: That happens sometimes."
+    assert "cyan" in str(assistant.style)
+
+
 @pytest.mark.asyncio
 async def test_transcript_navigation_keeps_input_focus_and_end_returns_latest() -> None:
     terminal = CompanionTerminal()
@@ -2291,6 +2312,19 @@ async def test_transcript_navigation_keeps_input_focus_and_end_returns_latest() 
         assert terminal._messages.scroll_y < terminal._messages.max_scroll_y
         assert terminal.focused is terminal._input
 
+        scroll_y = terminal._messages.scroll_y
+        terminal._write_message("new while reading history")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == scroll_y
+        assert terminal._new_messages.display
+
+        await pilot.click("#new-messages")
+        await pilot.pause()
+        assert terminal._messages.scroll_y == terminal._messages.max_scroll_y
+        assert terminal.focused is terminal._input
+        assert not terminal._new_messages.display
+
+        await pilot.press("pageup")
         await pilot.press("pagedown")
         await pilot.press("end")
         await pilot.pause()
