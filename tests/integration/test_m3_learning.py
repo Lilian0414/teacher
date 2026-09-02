@@ -110,6 +110,46 @@ def test_materially_han_review_answer_preserves_learning_state() -> None:
     assert (after.stage, after.next_review_at) == state
 
 
+def test_retry_grading_never_rewrites_first_incorrect_scheduling_event() -> None:
+    client, _, repository, current = make_m3_client()
+    with client:
+        item = client.post("/v1/commands/execute", json={"raw": "/help 我今天很累"}).json()[
+            "learning_item"
+        ]
+        first = client.post(
+            f"/v1/review/{item['id']}/answer", json={"answer": "not the answer"}
+        ).json()["result"]
+        scheduled = repository.get_item(item["id"], user_id="default")
+        assert scheduled is not None
+        durable_state = (
+            scheduled.stage,
+            scheduled.next_review_at,
+            len(repository.attempts_for(item["id"])),
+        )
+
+        wrong_retry = client.post(
+            f"/v1/review/{item['id']}/retry", json={"answer": "still not the answer"}
+        ).json()["result"]
+        correct_retry = client.post(
+            f"/v1/review/{item['id']}/retry",
+            json={"answer": "Natural English for: 我今天很累"},
+        ).json()["result"]
+        after = repository.get_item(item["id"], user_id="default")
+        assert after is not None
+
+    assert first["correct"] is False
+    assert scheduled.next_review_at == (current[0] + timedelta(days=1)).isoformat()
+    assert wrong_retry["correct"] is False
+    assert wrong_retry["feedback"] == "Not yet — try again"
+    assert correct_retry["correct"] is True
+    assert correct_retry["feedback"] == "Correct after retry"
+    assert (
+        after.stage,
+        after.next_review_at,
+        len(repository.attempts_for(item["id"])),
+    ) == durable_state
+
+
 def test_help_and_hint_same_prompt_remain_distinct_through_api() -> None:
     client, provider, repository, _ = make_m3_client()
 

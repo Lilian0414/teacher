@@ -242,7 +242,7 @@ async def test_correct_completion_waits_for_thumb_or_finish_and_incorrect_bypass
     correct = False
     terminal._enter_review("item-2")
     await terminal._submit_review_answer("wrong")
-    assert cast(InteractionMode, terminal._mode) == InteractionMode.NORMAL
+    assert cast(InteractionMode, terminal._mode) == InteractionMode.REVIEW
     await terminal._client.aclose()
 
 

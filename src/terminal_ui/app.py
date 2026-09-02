@@ -42,6 +42,7 @@ class InteractionMode(StrEnum):
     AWAITING_HINT_SENTENCE = "awaiting_hint_sentence"
     HELP_RESULT = "help_result"
     REVIEW = "review"
+    REVIEW_ITEM_COMPLETE = "review_item_complete"
     PRACTICE_PROMPT = "practice_prompt"
     REVIEW_COMPLETE = "review_complete"
 
@@ -185,6 +186,7 @@ class CompanionTerminal(App[None]):
         self._camera_preview = Static("", id="camera-preview")
         self._gesture_feedback = Static("", id="gesture-feedback")
         self._review_hint_button = Button("Show hint", id="review-hint")
+        self._review_skip_button = Button("Skip", id="review-skip")
         self._practice_panel = Vertical(
             self._practice_title,
             self._practice_prompt,
@@ -192,6 +194,7 @@ class CompanionTerminal(App[None]):
             self._gesture_feedback,
             self._camera_preview,
             self._review_hint_button,
+            self._review_skip_button,
             id="practice-panel",
         )
         self._invitation_buttons = [
@@ -235,6 +238,8 @@ class CompanionTerminal(App[None]):
         self._active_review_prompt: str | None = None
         self._active_review_position = 1
         self._active_review_total = 1
+        self._review_retrying = False
+        self._held_next_question: dict[str, Any] | None = None
         self._waiting = False
         self._mode = InteractionMode.NORMAL
         self._pending_help_content: str | None = None
@@ -304,7 +309,12 @@ class CompanionTerminal(App[None]):
     def _update_workspace_layout(self) -> None:
         self.set_class(
             self.size.width < 90
-            and self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE),
+            and self._mode
+            in (
+                InteractionMode.REVIEW,
+                InteractionMode.REVIEW_ITEM_COMPLETE,
+                InteractionMode.REVIEW_COMPLETE,
+            ),
             "compact",
         )
 
@@ -425,9 +435,16 @@ class CompanionTerminal(App[None]):
                 InteractionMode.PRACTICE_PROMPT,
             )
         if action == "toggle_gestures":
-            return self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE)
+            return self._mode in (
+                InteractionMode.REVIEW,
+                InteractionMode.REVIEW_ITEM_COMPLETE,
+                InteractionMode.REVIEW_COMPLETE,
+            )
         if action == "finish_review":
-            return self._mode == InteractionMode.REVIEW_COMPLETE
+            return self._mode in (
+                InteractionMode.REVIEW_ITEM_COMPLETE,
+                InteractionMode.REVIEW_COMPLETE,
+            )
         if action == "record_answer":
             return self._mode == InteractionMode.REVIEW
         if action == "stop_recording":
@@ -476,6 +493,7 @@ class CompanionTerminal(App[None]):
     def _refresh_camera_preview(self) -> None:
         if not self._gestures_enabled or self._mode not in (
             InteractionMode.REVIEW,
+            InteractionMode.REVIEW_ITEM_COMPLETE,
             InteractionMode.REVIEW_COMPLETE,
         ):
             self._camera_preview.display = False
@@ -523,7 +541,10 @@ class CompanionTerminal(App[None]):
             item_id = self._active_review_item_id
             if item_id is not None:
                 await self._run_guarded(lambda: self._show_review_hint(item_id))
-        elif intent == GestureIntent.THUMBS_UP and self._mode == InteractionMode.REVIEW_COMPLETE:
+        elif intent == GestureIntent.THUMBS_UP and self._mode in (
+            InteractionMode.REVIEW_ITEM_COMPLETE,
+            InteractionMode.REVIEW_COMPLETE,
+        ):
             self._review_feedback.update("Thumbs-up detected")
             await self.action_finish_review()
 
@@ -537,6 +558,9 @@ class CompanionTerminal(App[None]):
         self._write_message(self._format_command_result(result))
 
     async def action_finish_review(self) -> None:
+        if self._mode == InteractionMode.REVIEW_ITEM_COMPLETE:
+            self._advance_review_after_acknowledgement()
+            return
         if self._mode != InteractionMode.REVIEW_COMPLETE:
             return
         self._write_message("Review finished. Great work!", MessageRole.SUCCESS)
@@ -677,6 +701,10 @@ class CompanionTerminal(App[None]):
             if not self._waiting and self._mode == InteractionMode.REVIEW and item_id is not None:
                 await self._run_guarded(lambda: self._show_review_hint(item_id))
             return
+        if event.button.id == "review-skip":
+            if not self._waiting and self._mode == InteractionMode.REVIEW:
+                await self._skip_review_item()
+            return
         action_name = self._button_actions.get(event.button.id or "")
         if action_name == "stop_recording":
             await self.action_stop_recording()
@@ -752,6 +780,8 @@ class CompanionTerminal(App[None]):
         self._mode = mode
         self._active_review_item_id = None
         self._active_review_prompt = None
+        self._review_retrying = False
+        self._held_next_question = None
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "What do you want to say?"
@@ -768,6 +798,8 @@ class CompanionTerminal(App[None]):
         self._mode = InteractionMode.NORMAL
         self._active_review_item_id = None
         self._active_review_prompt = None
+        self._review_retrying = False
+        self._held_next_question = None
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "Say something..."
@@ -784,6 +816,8 @@ class CompanionTerminal(App[None]):
         self._active_review_prompt = prompt
         self._active_review_position = position
         self._active_review_total = total
+        self._review_retrying = False
+        self._held_next_question = None
         self._pending_help_content = None
         self._pending_help_expression = None
         self._input.placeholder = "Answer the review question..."
@@ -816,7 +850,11 @@ class CompanionTerminal(App[None]):
         self._button_actions = actions
 
     def _refresh_practice_panel(self) -> None:
-        visible = self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE)
+        visible = self._mode in (
+            InteractionMode.REVIEW,
+            InteractionMode.REVIEW_ITEM_COMPLETE,
+            InteractionMode.REVIEW_COMPLETE,
+        )
         self._practice_panel.display = visible
         self._update_workspace_layout()
         if not visible:
@@ -826,8 +864,15 @@ class CompanionTerminal(App[None]):
             self._practice_title.update("Review complete ✓")
             self._practice_prompt.update("Great work! Press Finish or give a thumbs-up.")
             self._review_hint_button.display = False
+            self._review_skip_button.display = False
+        elif self._mode == InteractionMode.REVIEW_ITEM_COMPLETE:
+            self._practice_title.update("Item complete ✓")
+            self._practice_prompt.update("Press Next or give a thumbs-up to continue.")
+            self._review_hint_button.display = False
+            self._review_skip_button.display = False
         else:
             self._review_hint_button.display = True
+            self._review_skip_button.display = self._review_retrying
             self._practice_title.update(
                 f"Review · {self._active_review_position} / {self._active_review_total}"
             )
@@ -837,6 +882,8 @@ class CompanionTerminal(App[None]):
             self._review_feedback.update("● Recording · Stop & submit or Cancel")
         elif self._finishing_recording:
             self._review_feedback.update("Transcribing… · you can still type your answer")
+        elif self._review_retrying and self._mode == InteractionMode.REVIEW:
+            self._review_feedback.update("Not yet — try again")
         elif self._gesture_status is GestureState.ON:
             self._review_feedback.update("Gestures on · camera stays on this device")
         elif self._gesture_status is GestureState.UNAVAILABLE:
@@ -875,6 +922,9 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW_COMPLETE:
             gesture_label = self._gesture_action_label()
             return [("Finish", "finish_review"), (gesture_label, "toggle_gestures"), None]
+        if self._mode == InteractionMode.REVIEW_ITEM_COMPLETE:
+            gesture_label = self._gesture_action_label()
+            return [("Next", "finish_review"), (gesture_label, "toggle_gestures"), None]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:
                 return [None, None, ("Retry completion", "cancel_intent")]
@@ -942,8 +992,12 @@ class CompanionTerminal(App[None]):
             await self._run_guarded(lambda: self._run_hint_capture(raw))
         elif self._mode == InteractionMode.HELP_RESULT:
             self._write_message("Please choose an action: Use this / Hint only / Try myself.")
-        elif self._mode == InteractionMode.REVIEW_COMPLETE:
-            self._write_message("Please press Finish (Ctrl+F), or give a thumbs-up.")
+        elif self._mode in (
+            InteractionMode.REVIEW_ITEM_COMPLETE,
+            InteractionMode.REVIEW_COMPLETE,
+        ):
+            action = "Next" if self._mode == InteractionMode.REVIEW_ITEM_COMPLETE else "Finish"
+            self._write_message(f"Please press {action} (Ctrl+F), or give a thumbs-up.")
         elif raw.startswith("/"):
             await self._run_guarded(lambda: self._send_command(raw))
         elif self._mode == InteractionMode.REVIEW:
@@ -1241,8 +1295,9 @@ class CompanionTerminal(App[None]):
         if is_materially_han(answer):
             self._write_message(ENGLISH_INPUT_REDIRECT, MessageRole.INCORRECT)
             return
+        operation = "retry" if self._review_retrying else "answer"
         response = await self._client.post(
-            f"/v1/review/{item_id}/answer",
+            f"/v1/review/{item_id}/{operation}",
             json={
                 "answer": answer,
                 "position": self._active_review_position,
@@ -1261,26 +1316,56 @@ class CompanionTerminal(App[None]):
         else:
             result_role = MessageRole.INCORRECT
         self._write_message(self._format_review_result(result), result_role)
+        if result.get("grading_deferred") is True:
+            return
         next_question = result.get("next_question")
-        if isinstance(next_question, dict):
-            self._enter_review(
-                str(next_question["id"]),
-                position=int(next_question.get("position", 1)),
-                total=int(next_question.get("total", 1)),
-                prompt=str(next_question.get("prompt", "")) or None,
-            )
-        elif result.get("correct") and result.get("complete") is True:
+        if not self._review_retrying and isinstance(next_question, dict):
+            self._held_next_question = next_question
+        if result.get("correct") is True:
+            self._enter_review_acknowledgement()
+            return
+        self._review_retrying = True
+        self._refresh_practice_panel()
+
+    def _enter_review_acknowledgement(self) -> None:
+        if self._held_next_question is None:
             self._mode = InteractionMode.REVIEW_COMPLETE
-            self._active_review_item_id = None
-            self._active_review_prompt = None
             self._input.placeholder = "Press Finish or give a thumbs-up..."
-            self._write_message(
-                "Great job — give yourself a thumbs-up to finish the review. "
-                "You can also press Finish (Ctrl+F)."
-            )
-            self._after_mode_change()
+            self._write_message("Item complete — press Finish or give a thumbs-up.")
         else:
-            self._reset_to_normal()
+            self._mode = InteractionMode.REVIEW_ITEM_COMPLETE
+            self._input.placeholder = "Press Next or give a thumbs-up..."
+            self._write_message("Item complete — press Next or give a thumbs-up.")
+        self._after_mode_change()
+
+    def _advance_review_after_acknowledgement(self) -> None:
+        question = self._held_next_question
+        if self._mode != InteractionMode.REVIEW_ITEM_COMPLETE or question is None:
+            return
+        self._enter_review(
+            str(question["id"]),
+            position=int(question.get("position", 1)),
+            total=int(question.get("total", 1)),
+            prompt=str(question.get("prompt", "")) or None,
+        )
+
+    async def _skip_review_item(self) -> None:
+        """Leave a retrying item without grading it again or consuming its held successor."""
+        if not self._review_retrying:
+            return
+        question = self._held_next_question
+        if question is not None:
+            self._enter_review(
+                str(question["id"]),
+                position=int(question.get("position", 1)),
+                total=int(question.get("total", 1)),
+                prompt=str(question.get("prompt", "")) or None,
+            )
+            return
+        self._mode = InteractionMode.REVIEW_COMPLETE
+        self._input.placeholder = "Press Finish or give a thumbs-up..."
+        self._write_message("Review complete — press Finish or give a thumbs-up.")
+        self._after_mode_change()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
         if self._pending_practice_completion is not None:
@@ -1670,7 +1755,12 @@ class CompanionTerminal(App[None]):
                 if feedback
                 else "I couldn't grade that confidently — try another wording."
             )
-        verdict = "Correct" if result.get("correct") else "Incorrect"
+        feedback = result.get("feedback")
+        verdict = (
+            str(feedback)
+            if feedback
+            else ("Correct" if result.get("correct") else "Incorrect")
+        )
         accepted = " / ".join(str(value) for value in result.get("accepted_answers") or [])
         lines = [
             f"{verdict}.",
