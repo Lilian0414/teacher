@@ -12,7 +12,7 @@ from rich.markdown import Markdown
 from textual.widgets import Input, Static
 
 from companion.settings import get_settings
-from terminal_ui.app import CompanionTerminal, InteractionMode, MessageRole
+from terminal_ui.app import CompanionTerminal, GestureState, InteractionMode, MessageRole
 from terminal_ui.gestures import PREVIEW_INTERVAL_SECONDS
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
@@ -237,10 +237,10 @@ async def test_review_panel_tracks_recording_and_failed_transcription_states() -
 def test_review_panel_presents_unavailable_gestures_and_completion() -> None:
     terminal = make_terminal()
     terminal._enter_review("item-1", prompt="Say hello")
-    terminal._gesture_status = "unavailable"
+    terminal._gesture_status = GestureState.UNAVAILABLE
     terminal._refresh_practice_panel()
 
-    assert "Camera unavailable" in static_text(terminal._review_feedback)
+    assert "Gestures unavailable" in static_text(terminal._review_feedback)
     assert terminal._input.disabled is False
     assert str(terminal._action_buttons[0].label) == "Speak answer"
 
@@ -251,18 +251,38 @@ def test_review_panel_presents_unavailable_gestures_and_completion() -> None:
     assert not terminal._review_hint_button.display
 
 
-def test_narrow_preview_collapses_without_disabling_review_controls() -> None:
-    terminal = make_terminal()
-    terminal._enter_review("item-1", prompt="Answer me")
-    terminal._gestures_enabled = True
-    terminal._preview_frames.publish([[(1, 2, 3)]], now=1.0)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("size", "stacked"), [((120, 40), False), ((80, 40), True)])
+async def test_review_workspace_reflows_without_crushing_controls(
+    size: tuple[int, int], stacked: bool
+) -> None:
+    terminal = CompanionTerminal()
 
-    terminal._refresh_camera_preview()
+    async def skip_startup() -> None:
+        return None
 
-    assert terminal.size.width < 90
-    assert not terminal._camera_preview.display
-    assert terminal._practice_panel.display
-    assert str(terminal._action_buttons[0].label) == "Speak answer"
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=size) as pilot:
+        terminal._enter_review("item-1", prompt="Answer me")
+        terminal._gestures_enabled = True
+        terminal._gesture_status = GestureState.ON
+        frame = [[(1, 2, 3)] * 16 for _ in range(9)]
+        terminal._preview_frames.publish(frame, now=1.0)
+        terminal._refresh_camera_preview()
+        await pilot.pause()
+
+        transcript_region = terminal.query_one("#transcript").region
+        panel_region = terminal._practice_panel.region
+        assert (panel_region.y > transcript_region.y) is stacked
+        assert panel_region.width >= (75 if stacked else 42)
+        assert terminal._camera_preview.region.height >= 8
+        assert terminal._camera_preview.display
+        assert terminal._review_hint_button.display
+        assert not terminal._review_hint_button.disabled
+        terminal._gesture_feedback.display = True
+        await pilot.pause()
+        assert terminal._gesture_feedback.region.height == 3
+        assert str(terminal._action_buttons[0].label) == "Speak answer"
 
 
 @pytest.mark.asyncio
@@ -301,7 +321,7 @@ async def test_user_can_cancel_active_recording_without_transcription_or_answer(
     assert terminal._input.disabled is False
     assert [str(button.label) for button in terminal._action_buttons] == [
         "Speak answer",
-        "Gestures: disabled",
+        "Gestures: Off",
         "Stop review",
     ]
     assert any("still type" in str(value) for value in cast(MessageSink, terminal._messages).values)
@@ -2053,7 +2073,7 @@ async def test_review_owns_input_and_blocks_help_or_hint_entry_points() -> None:
     assert terminal._input.placeholder == "Answer the review question..."
     assert [str(button.label) for button in terminal._action_buttons] == [
         "Speak answer",
-        "Gestures: disabled",
+        "Gestures: Off",
         "Stop review",
     ]
     assert requests == []

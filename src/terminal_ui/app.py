@@ -58,6 +58,14 @@ class MessageRole(StrEnum):
     ERROR = "error"
 
 
+class GestureState(StrEnum):
+    """Stable internal gesture states with one learner-facing vocabulary."""
+
+    OFF = "Off"
+    ON = "On"
+    UNAVAILABLE = "Unavailable"
+
+
 class CompanionTerminal(App[None]):
     CSS = """
     Screen {
@@ -102,13 +110,14 @@ class CompanionTerminal(App[None]):
     #workspace { height: 1fr; }
     #practice-panel {
         width: 1fr;
-        min-width: 30;
+        min-width: 42;
+        min-height: 16;
         border: round $accent;
         padding: 0 1;
         display: none;
     }
     #practice-title { text-style: bold; color: $accent; }
-    #camera-preview { height: auto; display: none; }
+    #camera-preview { height: 1fr; min-height: 8; display: none; }
     #gesture-feedback {
         height: 3;
         content-align: center middle;
@@ -119,6 +128,9 @@ class CompanionTerminal(App[None]):
     #onboarding { height: auto; border: round $success; padding: 0 1; display: none; }
     #onboarding Select { width: 1fr; margin-right: 1; }
     #onboarding-actions { height: 3; }
+    .compact #workspace { layout: vertical; }
+    .compact #transcript { width: 1fr; height: 1fr; min-height: 8; }
+    .compact #practice-panel { width: 1fr; min-width: 0; height: 2fr; min-height: 16; }
     """
 
     # Exact key choices are flexible (see M3.5 issue): Ctrl+I is avoided
@@ -241,7 +253,7 @@ class CompanionTerminal(App[None]):
         self._finishing_recording = False
         self._gesture_adapter = gesture_adapter or OpenCVMediaPipeGestureAdapter()
         self._gestures_enabled = False
-        self._gesture_status = "disabled"
+        self._gesture_status = GestureState.OFF
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._preview_frames = LatestFrameBuffer(max_fps=PREVIEW_FPS)
         self._gesture_feedback_timer: Any | None = None
@@ -284,6 +296,17 @@ class CompanionTerminal(App[None]):
         await self._show_onboarding_if_needed()
         await self.ensure_conversation()
         self._write_message(self._startup_message(state))
+
+    def on_resize(self) -> None:
+        """Reflow the workspace at the compact breakpoint."""
+        self._update_workspace_layout()
+
+    def _update_workspace_layout(self) -> None:
+        self.set_class(
+            self.size.width < 90
+            and self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE),
+            "compact",
+        )
 
     async def on_unmount(self) -> None:
         self._gesture_adapter.stop()
@@ -424,7 +447,7 @@ class CompanionTerminal(App[None]):
         if self._gestures_enabled:
             self._gesture_adapter.stop()
             self._gestures_enabled = False
-            self._gesture_status = "disabled"
+            self._gesture_status = GestureState.OFF
             self._preview_frames.clear()
             self._camera_preview.display = False
             self._write_message("[system] Gestures disabled.")
@@ -432,7 +455,7 @@ class CompanionTerminal(App[None]):
             try:
                 self._gesture_adapter.start(self._on_gesture_from_adapter)
             except GestureUnavailableError as exc:
-                self._gesture_status = "unavailable"
+                self._gesture_status = GestureState.UNAVAILABLE
                 self._review_feedback.update(f"{exc.learner_message} · type or speak your answer")
                 self._write_message(
                     f"[system] Gestures unavailable: {exc}. "
@@ -440,7 +463,7 @@ class CompanionTerminal(App[None]):
                 )
             else:
                 self._gestures_enabled = True
-                self._gesture_status = "active"
+                self._gesture_status = GestureState.ON
                 self._write_message(
                     "[system] Gestures active (local camera only; nothing is saved or uploaded)."
                 )
@@ -458,16 +481,12 @@ class CompanionTerminal(App[None]):
             self._camera_preview.display = False
             self._preview_frames.clear()
             return
-        if self.size.width < 90:
-            self._camera_preview.display = False
-            self._preview_frames.clear()
-            return
         frame = self._preview_frames.take_latest()
         if frame is not None:
             panel_width = self._practice_panel.size.width
             panel_height = self._practice_panel.size.height
             preview_width = max(1, panel_width - 4) if panel_width else 48
-            preview_height = max(1, panel_height - 10) if panel_height else 12
+            preview_height = max(8, panel_height - 8) if panel_height else 12
             self._camera_preview.update(
                 render_frame(frame, width=preview_width, height=preview_height)
             )
@@ -485,7 +504,7 @@ class CompanionTerminal(App[None]):
 
     def _handle_gesture_failure(self, error: GestureUnavailableError) -> None:
         self._gestures_enabled = False
-        self._gesture_status = "unavailable"
+        self._gesture_status = GestureState.UNAVAILABLE
         self._preview_frames.clear()
         self._camera_preview.display = False
         self._review_feedback.update(f"{error.learner_message} · type or speak your answer")
@@ -744,7 +763,7 @@ class CompanionTerminal(App[None]):
         if self._gestures_enabled:
             self._gesture_adapter.stop()
             self._gestures_enabled = False
-            self._gesture_status = "disabled"
+            self._gesture_status = GestureState.OFF
             self._preview_frames.clear()
         self._mode = InteractionMode.NORMAL
         self._active_review_item_id = None
@@ -799,6 +818,7 @@ class CompanionTerminal(App[None]):
     def _refresh_practice_panel(self) -> None:
         visible = self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE)
         self._practice_panel.display = visible
+        self._update_workspace_layout()
         if not visible:
             self._camera_preview.display = False
             return
@@ -817,12 +837,19 @@ class CompanionTerminal(App[None]):
             self._review_feedback.update("● Recording · Stop & submit or Cancel")
         elif self._finishing_recording:
             self._review_feedback.update("Transcribing… · you can still type your answer")
-        elif self._gesture_status == "active":
-            self._review_feedback.update("Gesture ready · camera stays on this device")
-        elif self._gesture_status == "unavailable":
-            self._review_feedback.update("Camera unavailable · type or speak your answer")
+        elif self._gesture_status is GestureState.ON:
+            self._review_feedback.update("Gestures on · camera stays on this device")
+        elif self._gesture_status is GestureState.UNAVAILABLE:
+            self._review_feedback.update("Gestures unavailable · type or speak your answer")
         else:
-            self._review_feedback.update("Gesture off · type or speak your answer")
+            self._review_feedback.update("Gestures off · type or speak your answer")
+
+    def _gesture_action_label(self) -> str:
+        """Return a non-empty public label without leaking internal state values."""
+        state = GestureState.ON if self._gestures_enabled else self._gesture_status
+        if not isinstance(state, GestureState):
+            state = GestureState.UNAVAILABLE
+        return f"Gestures: {state.value}"
 
     def _mode_button_specs(self) -> list[tuple[str, str] | None]:
         if self._mode == InteractionMode.HELP_RESULT:
@@ -839,18 +866,14 @@ class CompanionTerminal(App[None]):
         if self._mode == InteractionMode.REVIEW:
             if self._recording:
                 return [("Stop & submit", "record_answer"), None, ("Cancel", "stop_recording")]
-            gesture_label = (
-                "Gestures: on" if self._gestures_enabled else f"Gestures: {self._gesture_status}"
-            )
+            gesture_label = self._gesture_action_label()
             return [
                 ("Speak answer", "record_answer"),
                 (gesture_label, "toggle_gestures"),
                 ("Stop review", "cancel_intent"),
             ]
         if self._mode == InteractionMode.REVIEW_COMPLETE:
-            gesture_label = (
-                "Gestures: on" if self._gestures_enabled else f"Gestures: {self._gesture_status}"
-            )
+            gesture_label = self._gesture_action_label()
             return [("Finish", "finish_review"), (gesture_label, "toggle_gestures"), None]
         if self._mode == InteractionMode.PRACTICE_PROMPT:
             if self._pending_practice_completion is not None:

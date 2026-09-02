@@ -40,11 +40,11 @@ _MESSAGES = {
     GestureFailure.RUNTIME_FAILED: "Gesture runtime unavailable",
 }
 
-PREVIEW_TARGET_FPS = 18.0
+PREVIEW_TARGET_FPS = 12.0
 # Compatibility name consumed by the current Textual UI.
 PREVIEW_FPS = PREVIEW_TARGET_FPS
 PREVIEW_INTERVAL_SECONDS = 1.0 / PREVIEW_TARGET_FPS
-PREVIEW_PAYLOAD_WIDTH = 128
+PREVIEW_PAYLOAD_WIDTH = 192
 INFERENCE_INTERVAL_SECONDS = 0.1
 
 
@@ -175,7 +175,7 @@ def _gesture_worker(
                     preview_width = min(PREVIEW_PAYLOAD_WIDTH, width)
                     preview_height = max(1, round(height * preview_width / width))
                     preview = cv2.resize(
-                        frame, (preview_width, preview_height), interpolation=cv2.INTER_NEAREST
+                        frame, (preview_width, preview_height), interpolation=cv2.INTER_AREA
                     )
                     preview = cv2.flip(preview, 1)  # Preview only; inference stays unmirrored.
                     rgb_preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB).tolist()
