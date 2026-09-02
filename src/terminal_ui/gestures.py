@@ -40,7 +40,7 @@ _MESSAGES = {
     GestureFailure.RUNTIME_FAILED: "Gesture runtime unavailable",
 }
 
-PREVIEW_TARGET_FPS = 12.0
+PREVIEW_TARGET_FPS = 18.0
 # Compatibility name consumed by the current Textual UI.
 PREVIEW_FPS = PREVIEW_TARGET_FPS
 PREVIEW_INTERVAL_SECONDS = 1.0 / PREVIEW_TARGET_FPS
