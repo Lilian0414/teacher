@@ -9,9 +9,12 @@ from zoneinfo import ZoneInfo
 import httpx
 from rich.markdown import Markdown
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static
 
 from companion.input_policy import ENGLISH_INPUT_REDIRECT, is_materially_han
@@ -67,6 +70,64 @@ class GestureState(StrEnum):
     UNAVAILABLE = "Unavailable"
 
 
+class WorkspaceSplitter(Widget):
+    """Mouse-capturing resize handle for the review workspace."""
+
+    can_focus = False
+
+    class Dragged(Message):
+        def __init__(self, screen_x: int, screen_y: int) -> None:
+            super().__init__()
+            self.screen_x = screen_x
+            self.screen_y = screen_y
+
+    class Released(Message):
+        pass
+
+    class Reset(Message):
+        pass
+
+    def __init__(self) -> None:
+        super().__init__(id="workspace-splitter")
+        self._dragging = False
+        self._suppress_release = False
+        self._last_press = float("-inf")
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button != 1:
+            return
+        now = time.monotonic()
+        if now - self._last_press <= 0.5:
+            self._dragging = False
+            self._suppress_release = True
+            self.release_mouse()
+            self.post_message(self.Reset())
+        else:
+            self._dragging = True
+            self.capture_mouse()
+        self._last_press = now
+        event.stop()
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if self._dragging:
+            self.post_message(self.Dragged(event.screen_x, event.screen_y))
+            event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self._suppress_release and event.button == 1:
+            self._suppress_release = False
+            event.stop()
+            return
+        if self._dragging and event.button == 1:
+            self._dragging = False
+            self.release_mouse()
+            self.post_message(self.Released())
+            event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+
+
 class CompanionTerminal(App[None]):
     CSS = """
     Screen {
@@ -108,7 +169,14 @@ class CompanionTerminal(App[None]):
         dock: bottom;
     }
     #invitation { height: auto; border: round $accent; padding: 0 1; display: none; }
+    #invitation-actions { height: auto; }
     #workspace { height: 1fr; }
+    #workspace-splitter {
+        width: 1;
+        height: 1fr;
+        background: $accent;
+        display: none;
+    }
     #practice-panel {
         width: 1fr;
         min-width: 42;
@@ -130,6 +198,7 @@ class CompanionTerminal(App[None]):
     #onboarding Select { width: 1fr; margin-right: 1; }
     #onboarding-actions { height: 3; }
     .compact #workspace { layout: vertical; }
+    .compact #workspace-splitter { width: 1fr; height: 1; }
     .compact #transcript { width: 1fr; height: 1fr; min-height: 8; }
     .compact #practice-panel { width: 1fr; min-width: 0; height: 2fr; min-height: 16; }
     """
@@ -197,6 +266,8 @@ class CompanionTerminal(App[None]):
             self._review_skip_button,
             id="practice-panel",
         )
+        self._workspace_splitter = WorkspaceSplitter()
+        self._pane_ratio = 0.6
         self._invitation_buttons = [
             Button("Start", id="invitation-start", variant="success"),
             Button("Later", id="invitation-later"),
@@ -277,6 +348,7 @@ class CompanionTerminal(App[None]):
                 with Vertical(id="transcript"):
                     yield self._messages
                     yield self._new_messages
+                yield self._workspace_splitter
                 yield self._practice_panel
             yield self._onboarding
             yield self._invitation
@@ -307,16 +379,66 @@ class CompanionTerminal(App[None]):
         self._update_workspace_layout()
 
     def _update_workspace_layout(self) -> None:
-        self.set_class(
+        compact = (
             self.size.width < 90
             and self._mode
             in (
                 InteractionMode.REVIEW,
                 InteractionMode.REVIEW_ITEM_COMPLETE,
                 InteractionMode.REVIEW_COMPLETE,
-            ),
-            "compact",
+            )
         )
+        self.set_class(compact, "compact")
+        visible = self._mode in (
+            InteractionMode.REVIEW,
+            InteractionMode.REVIEW_ITEM_COMPLETE,
+            InteractionMode.REVIEW_COMPLETE,
+        )
+        self._workspace_splitter.display = visible
+        if visible and self.is_running:
+            self.call_after_refresh(self._apply_pane_ratio)
+
+    def _apply_pane_ratio(self) -> None:
+        """Apply and clamp the session-local ratio to the current orientation."""
+        workspace = self.query_one("#workspace")
+        transcript = self.query_one("#transcript")
+        compact = self.has_class("compact")
+        available = (workspace.size.height if compact else workspace.size.width) - 1
+        if available <= 1:
+            return
+        left_min, right_min = ((8, 16) if compact else (30, 42))
+        if available < left_min + right_min:
+            left_min = min(left_min, max(1, available // 3))
+            right_min = min(right_min, max(1, available - left_min))
+        first = min(max(round(available * self._pane_ratio), left_min), available - right_min)
+        if compact:
+            transcript.styles.width = "1fr"
+            self._practice_panel.styles.width = "1fr"
+            transcript.styles.height = first
+            self._practice_panel.styles.height = max(1, available - first)
+        else:
+            transcript.styles.height = "1fr"
+            self._practice_panel.styles.height = "1fr"
+            transcript.styles.width = first
+            self._practice_panel.styles.width = max(1, available - first)
+
+    def on_workspace_splitter_dragged(self, message: WorkspaceSplitter.Dragged) -> None:
+        workspace = self.query_one("#workspace")
+        compact = self.has_class("compact")
+        available = (workspace.size.height if compact else workspace.size.width) - 1
+        origin = workspace.region.y if compact else workspace.region.x
+        coordinate = message.screen_y if compact else message.screen_x
+        if available > 0:
+            self._pane_ratio = (coordinate - origin) / available
+            self._apply_pane_ratio()
+
+    def on_workspace_splitter_released(self, message: WorkspaceSplitter.Released) -> None:
+        self._focus_input()
+
+    def on_workspace_splitter_reset(self, message: WorkspaceSplitter.Reset) -> None:
+        self._pane_ratio = 0.6
+        self._apply_pane_ratio()
+        self._focus_input()
 
     async def on_unmount(self) -> None:
         self._gesture_adapter.stop()

@@ -9,6 +9,7 @@ import httpx
 import pytest
 from rich.console import Console
 from rich.markdown import Markdown
+from textual import events
 from textual.widgets import Input, Static
 
 from companion.settings import get_settings
@@ -263,6 +264,7 @@ async def test_review_workspace_reflows_without_crushing_controls(
 
     terminal.on_mount = skip_startup  # type: ignore[method-assign]
     async with terminal.run_test(size=size) as pilot:
+        terminal._hide_invitation()
         terminal._enter_review("item-1", prompt="Answer me")
         terminal._gestures_enabled = True
         terminal._gesture_status = GestureState.ON
@@ -310,6 +312,101 @@ async def test_item_complete_keeps_compact_review_workspace_stacked() -> None:
         assert terminal.has_class("compact")
         assert panel_region.y > transcript_region.y
         assert panel_region.width >= 75
+
+
+def mouse_move(x: int, y: int) -> events.MouseMove:
+    """Build the mouse-move primitive missing from Textual 0.89's Pilot."""
+    return events.MouseMove(None, x, y, 0, 0, 1, False, False, False, x, y)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("size", "compact"), [((120, 40), False), ((80, 40), True)])
+async def test_splitter_drag_changes_review_panes_and_restores_input_focus(
+    size: tuple[int, int], compact: bool
+) -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=size) as pilot:
+        terminal._hide_invitation()
+        terminal._enter_review("item-1", prompt="Answer me")
+        await pilot.pause()
+        splitter = terminal._workspace_splitter
+        transcript = terminal.query_one("#transcript")
+        workspace = terminal.query_one("#workspace")
+        before = transcript.region.height if compact else transcript.region.width
+
+        assert splitter.display
+        assert (splitter.region.height == 1) is compact
+        assert (splitter.region.width == 1) is not compact
+        assert await pilot.mouse_down(splitter)
+        if compact:
+            splitter.on_mouse_move(
+                mouse_move(workspace.region.x, workspace.region.y + workspace.size.height * 2 // 5)
+            )
+        else:
+            splitter.on_mouse_move(
+                mouse_move(workspace.region.x + workspace.size.width // 3, workspace.region.y)
+            )
+        await pilot.pause()
+        nearby_button = terminal._action_buttons[0]
+        assert await pilot.mouse_up(
+            offset=(nearby_button.region.x, nearby_button.region.y)
+        )
+        await pilot.pause()
+
+        after = transcript.region.height if compact else transcript.region.width
+        assert after != before
+        assert terminal.focused is terminal._input
+        assert terminal._mode == InteractionMode.REVIEW
+
+
+@pytest.mark.asyncio
+async def test_splitter_clamps_resets_and_survives_orientation_changes() -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=(120, 40)) as pilot:
+        terminal._hide_invitation()
+        terminal._enter_review("item-1", prompt="Answer me")
+        await pilot.pause()
+        splitter = terminal._workspace_splitter
+        workspace = terminal.query_one("#workspace")
+        transcript = terminal.query_one("#transcript")
+
+        assert await pilot.mouse_down(splitter)
+        splitter.on_mouse_move(mouse_move(workspace.region.right - 1, workspace.region.y))
+        await pilot.pause()
+        assert await pilot.mouse_up(splitter)
+        await pilot.pause()
+        assert transcript.region.width >= 30
+        assert terminal._practice_panel.region.width >= 42
+
+        await pilot.resize_terminal(80, 40)
+        await pilot.pause()
+        assert terminal.has_class("compact")
+        assert splitter.region.height == 1
+        assert transcript.region.height >= 8
+        assert terminal._practice_panel.region.height >= 16
+
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        assert not terminal.has_class("compact")
+        assert terminal._practice_panel.region.x > transcript.region.x
+        assert terminal._practice_panel.region.width >= 42
+
+        await asyncio.sleep(0.51)
+        assert await pilot.click(splitter)
+        await pilot.click(splitter)
+        await pilot.pause()
+        expected = round((workspace.size.width - 1) * 0.6)
+        assert transcript.region.width == expected
 
 
 @pytest.mark.asyncio
