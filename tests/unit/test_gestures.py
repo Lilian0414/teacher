@@ -8,7 +8,7 @@ import httpx
 import pytest
 from rich.text import Text
 
-from terminal_ui.app import CompanionTerminal, InteractionMode
+from terminal_ui.app import CompanionTerminal, GestureState, InteractionMode
 from terminal_ui.gestures import (
     INFERENCE_INTERVAL_SECONDS,
     PREVIEW_INTERVAL_SECONDS,
@@ -83,9 +83,9 @@ def test_preview_buffer_is_latest_only_and_throttled() -> None:
 
 
 def test_preview_cadence_and_payload_are_modestly_bounded() -> None:
-    assert PREVIEW_TARGET_FPS == 18.0
-    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 18)
-    assert PREVIEW_PAYLOAD_WIDTH == 128
+    assert PREVIEW_TARGET_FPS == 12.0
+    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 12)
+    assert PREVIEW_PAYLOAD_WIDTH == 192
     assert INFERENCE_INTERVAL_SECONDS == 0.1
     assert INFERENCE_INTERVAL_SECONDS != PREVIEW_INTERVAL_SECONDS
 
@@ -175,6 +175,20 @@ def test_widescreen_preview_preserves_aspect_ratio() -> None:
     assert all(len(line) == 24 for line in rendered.plain.splitlines())
 
 
+def test_gesture_action_labels_use_stable_public_states() -> None:
+    terminal = CompanionTerminal(gesture_adapter=FakeGestureAdapter())
+
+    assert terminal._gesture_action_label() == "Gestures: Off"
+    terminal._gestures_enabled = True
+    terminal._gesture_status = GestureState.ON
+    assert terminal._gesture_action_label() == "Gestures: On"
+    terminal._gestures_enabled = False
+    terminal._gesture_status = GestureState.UNAVAILABLE
+    assert terminal._gesture_action_label() == "Gestures: Unavailable"
+    terminal._gesture_status = cast(Any, "internal_status")
+    assert terminal._gesture_action_label() == "Gestures: Unavailable"
+
+
 @pytest.mark.asyncio
 async def test_uncertainty_reuses_hint_without_answer_request_or_state_change() -> None:
     paths: list[str] = []
@@ -240,7 +254,7 @@ async def test_camera_unavailable_leaves_typed_review_and_finish_fallback_usable
     terminal._messages = cast(Any, MessageSink())
     terminal._enter_review("item-1")
     await terminal.action_toggle_gestures()
-    assert terminal._gesture_status == "unavailable"
+    assert terminal._gesture_status is GestureState.UNAVAILABLE
     assert terminal._mode == InteractionMode.REVIEW
 
     terminal._mode = InteractionMode.REVIEW_COMPLETE
@@ -266,7 +280,7 @@ async def test_post_start_failure_deactivates_gestures_without_ending_review() -
     terminal._handle_gesture_failure(error)
 
     assert not terminal._gestures_enabled
-    assert terminal._gesture_status == "unavailable"
+    assert terminal._gesture_status is GestureState.UNAVAILABLE
     assert terminal._mode == InteractionMode.REVIEW
     assert "type or speak your answer" in str(terminal._review_feedback.renderable)
     await terminal._client.aclose()
