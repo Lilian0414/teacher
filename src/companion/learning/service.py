@@ -247,6 +247,74 @@ class LearningService:
         if decode_dt(item.next_review_at) > now:
             raise LearningItemNotDueError(item_id)
         accepted = self._repository.answers(item)
+        correct = await self._grade_answer(
+            item=item, answer=answer, accepted=accepted, llm_provider=llm_provider
+        )
+        if correct is None:
+            return self._deferred_result(
+                item=item,
+                answer=answer,
+                accepted=accepted,
+                position=position,
+                total=total,
+            )
+        return self._record_resolved_answer(
+            item=item,
+            answer=answer,
+            accepted=accepted,
+            correct=correct,
+            now=now,
+            position=position,
+            total=total,
+        )
+
+    async def grade_retry(
+        self,
+        *,
+        item_id: str,
+        answer: str,
+        llm_provider: LLMProvider,
+        position: int = 1,
+        total: int = 1,
+    ) -> ReviewResult:
+        """Grade a retry without recording an attempt or changing its schedule."""
+        if is_materially_han(answer):
+            raise ReviewInputLanguageError
+        item = self._repository.get_item(item_id, user_id=self._user_id)
+        if item is None:
+            raise LearningItemNotFoundError(item_id)
+        accepted = self._repository.answers(item)
+        correct = await self._grade_answer(
+            item=item, answer=answer, accepted=accepted, llm_provider=llm_provider
+        )
+        if correct is None:
+            return self._deferred_result(
+                item=item,
+                answer=answer,
+                accepted=accepted,
+                position=position,
+                total=total,
+            )
+        return ReviewResult(
+            correct=correct,
+            prompt=item.prompt,
+            submitted_answer=answer.strip(),
+            accepted_answers=accepted,
+            stage=item.stage,
+            next_review_at=decode_dt(item.next_review_at),
+            complete=correct,
+            feedback="Correct after retry" if correct else "Not yet — try again",
+        )
+
+    async def _grade_answer(
+        self,
+        *,
+        item: LearningItem,
+        answer: str,
+        accepted: list[str],
+        llm_provider: LLMProvider,
+    ) -> bool | None:
+        """Apply the canonical deterministic-then-semantic grading pipeline."""
         local_grade = self._grading_policy.deterministic_grade(answer, accepted)
         if local_grade == LocalGrade.CORRECT:
             correct = True
@@ -263,42 +331,16 @@ class LearningService:
                     )
                 )
             except LLMProviderError:
-                return self._deferred_result(
-                    item=item,
-                    answer=answer,
-                    accepted=accepted,
-                    position=position,
-                    total=total,
-                )
+                return None
             if decision.verdict == SemanticGradeVerdict.CORRECT:
                 if decision.target_preserved is not True:
-                    return self._deferred_result(
-                        item=item,
-                        answer=answer,
-                        accepted=accepted,
-                        position=position,
-                        total=total,
-                    )
+                    return None
                 correct = True
             elif decision.verdict == SemanticGradeVerdict.INCORRECT:
                 correct = False
             else:
-                return self._deferred_result(
-                    item=item,
-                    answer=answer,
-                    accepted=accepted,
-                    position=position,
-                    total=total,
-                )
-        return self._record_resolved_answer(
-            item=item,
-            answer=answer,
-            accepted=accepted,
-            correct=correct,
-            now=now,
-            position=position,
-            total=total,
-        )
+                return None
+        return correct
 
     def _record_resolved_answer(
         self,

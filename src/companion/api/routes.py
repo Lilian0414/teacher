@@ -553,6 +553,29 @@ async def submit_review_answer(
     return ReviewSubmissionResponse(result=result)
 
 
+@router.post("/v1/review/{item_id}/retry")
+async def retry_review_answer(
+    item_id: str,
+    request: ReviewAnswerRequest,
+    learning_service: LearningService = LearningDependency,
+    llm_provider: LLMProvider = LLMDependency,
+) -> ReviewSubmissionResponse:
+    """Grade an answer without creating another scheduling/mastery event."""
+    try:
+        result = await learning_service.grade_retry(
+            item_id=item_id,
+            answer=request.answer,
+            llm_provider=llm_provider,
+            position=request.position,
+            total=request.total,
+        )
+    except LearningItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Learning item not found") from exc
+    except ReviewInputLanguageError as exc:
+        raise HTTPException(status_code=422, detail=ENGLISH_INPUT_REDIRECT) from exc
+    return ReviewSubmissionResponse(result=result)
+
+
 async def _execute_language_command(
     *,
     parsed_name: str,
