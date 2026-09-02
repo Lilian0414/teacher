@@ -286,6 +286,33 @@ async def test_review_workspace_reflows_without_crushing_controls(
 
 
 @pytest.mark.asyncio
+async def test_item_complete_keeps_compact_review_workspace_stacked() -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=(80, 40)) as pilot:
+        terminal._enter_review("item-1", prompt="Answer me")
+        terminal._held_next_question = {
+            "id": "item-2",
+            "prompt": "Next answer",
+            "position": 2,
+            "total": 2,
+        }
+        terminal._enter_review_acknowledgement()
+        await pilot.pause()
+
+        transcript_region = terminal.query_one("#transcript").region
+        panel_region = terminal._practice_panel.region
+        assert terminal._mode == InteractionMode.REVIEW_ITEM_COMPLETE
+        assert terminal.has_class("compact")
+        assert panel_region.y > transcript_region.y
+        assert panel_region.width >= 75
+
+
+@pytest.mark.asyncio
 async def test_user_can_cancel_active_recording_without_transcription_or_answer() -> None:
     requests: list[str] = []
 
@@ -1669,6 +1696,75 @@ async def test_incorrect_retries_hold_question_until_explicit_next_acknowledgeme
     await terminal.handle_gesture(GestureIntent.THUMBS_UP)
     assert terminal._active_review_item_id == "item-2"
     assert paths == ["/v1/review/item-1/answer", "/v1/review/item-1/retry"]
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_skip_is_hidden_and_inert_for_fresh_review_question() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        raise AssertionError("fresh-question Skip must not call Core")
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._enter_review("item-1")
+
+    assert not terminal._review_skip_button.display
+    await terminal._skip_review_item()
+
+    assert paths == []
+    assert terminal._active_review_item_id == "item-1"
+    assert terminal._mode == InteractionMode.REVIEW
+    await terminal._client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_successor", [True, False])
+async def test_retry_skip_advances_or_finishes_without_another_request(
+    has_successor: bool,
+) -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "correct": False,
+                    "next_question": (
+                        {"id": "item-2", "prompt": "第二題", "position": 2, "total": 2}
+                        if has_successor
+                        else None
+                    ),
+                }
+            },
+        )
+
+    terminal = make_terminal()
+    await terminal._client.aclose()
+    terminal._client = httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    )
+    terminal._enter_review("item-1", prompt="第一題", total=2 if has_successor else 1)
+
+    await terminal._submit_review_answer("wrong")
+    assert terminal._review_skip_button.display
+    await terminal._skip_review_item()
+
+    assert paths == ["/v1/review/item-1/answer"]
+    if has_successor:
+        assert terminal._mode == InteractionMode.REVIEW
+        assert terminal._active_review_item_id == "item-2"
+        assert not terminal._review_skip_button.display
+    else:
+        assert terminal._mode == InteractionMode.REVIEW_COMPLETE
+        assert not terminal._review_skip_button.display
     await terminal._client.aclose()
 
 

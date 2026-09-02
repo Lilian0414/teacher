@@ -309,7 +309,12 @@ class CompanionTerminal(App[None]):
     def _update_workspace_layout(self) -> None:
         self.set_class(
             self.size.width < 90
-            and self._mode in (InteractionMode.REVIEW, InteractionMode.REVIEW_COMPLETE),
+            and self._mode
+            in (
+                InteractionMode.REVIEW,
+                InteractionMode.REVIEW_ITEM_COMPLETE,
+                InteractionMode.REVIEW_COMPLETE,
+            ),
             "compact",
         )
 
@@ -867,7 +872,7 @@ class CompanionTerminal(App[None]):
             self._review_skip_button.display = False
         else:
             self._review_hint_button.display = True
-            self._review_skip_button.display = True
+            self._review_skip_button.display = self._review_retrying
             self._practice_title.update(
                 f"Review · {self._active_review_position} / {self._active_review_total}"
             )
@@ -1320,7 +1325,7 @@ class CompanionTerminal(App[None]):
             self._enter_review_acknowledgement()
             return
         self._review_retrying = True
-        self._review_feedback.update("Not yet — try again")
+        self._refresh_practice_panel()
 
     def _enter_review_acknowledgement(self) -> None:
         if self._held_next_question is None:
@@ -1346,8 +1351,10 @@ class CompanionTerminal(App[None]):
 
     async def _skip_review_item(self) -> None:
         """Leave a retrying item without grading it again or consuming its held successor."""
+        if not self._review_retrying:
+            return
         question = self._held_next_question
-        if self._review_retrying and question is not None:
+        if question is not None:
             self._enter_review(
                 str(question["id"]),
                 position=int(question.get("position", 1)),
@@ -1355,7 +1362,10 @@ class CompanionTerminal(App[None]):
                 prompt=str(question.get("prompt", "")) or None,
             )
             return
-        await self._run_guarded(lambda: self._send_command("/review quit"))
+        self._mode = InteractionMode.REVIEW_COMPLETE
+        self._input.placeholder = "Press Finish or give a thumbs-up..."
+        self._write_message("Review complete — press Finish or give a thumbs-up.")
+        self._after_mode_change()
 
     async def _send_chat_message(self, raw: str, *, echo_user: bool = False) -> None:
         if self._pending_practice_completion is not None:
