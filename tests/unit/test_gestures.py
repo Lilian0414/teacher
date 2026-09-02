@@ -83,8 +83,8 @@ def test_preview_buffer_is_latest_only_and_throttled() -> None:
 
 
 def test_preview_cadence_and_payload_are_modestly_bounded() -> None:
-    assert PREVIEW_TARGET_FPS == 12.0
-    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 12)
+    assert PREVIEW_TARGET_FPS == 18.0
+    assert PREVIEW_INTERVAL_SECONDS == pytest.approx(1 / 18)
     assert PREVIEW_PAYLOAD_WIDTH == 192
     assert INFERENCE_INTERVAL_SECONDS == 0.1
     assert INFERENCE_INTERVAL_SECONDS != PREVIEW_INTERVAL_SECONDS
