@@ -365,6 +365,51 @@ async def test_splitter_drag_changes_review_panes_and_restores_input_focus(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("size", "compact"), [((120, 40), False), ((80, 40), True)])
+async def test_leaving_resized_review_restores_normal_transcript_size(
+    size: tuple[int, int], compact: bool
+) -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=size) as pilot:
+        terminal._hide_invitation()
+        terminal._enter_review("item-1", prompt="Answer me")
+        await pilot.pause()
+        splitter = terminal._workspace_splitter
+        transcript = terminal.query_one("#transcript")
+        workspace = terminal.query_one("#workspace")
+
+        assert await pilot.mouse_down(splitter)
+        if compact:
+            splitter.on_mouse_move(
+                mouse_move(workspace.region.x, workspace.region.y + workspace.size.height // 3)
+            )
+        else:
+            splitter.on_mouse_move(
+                mouse_move(workspace.region.x + workspace.size.width // 3, workspace.region.y)
+            )
+        assert await pilot.mouse_up(splitter)
+        await pilot.pause()
+        resized_ratio = terminal._pane_ratio
+        assert resized_ratio != 0.6
+
+        terminal._reset_to_normal()
+        await pilot.pause()
+
+        assert not terminal._practice_panel.display
+        assert not splitter.display
+        assert transcript.styles.width is None
+        assert transcript.styles.height is None
+        assert transcript.region.width == workspace.region.width
+        assert transcript.region.height == workspace.region.height
+        assert terminal._pane_ratio == resized_ratio
+
+
+@pytest.mark.asyncio
 async def test_splitter_clamps_resets_and_survives_orientation_changes() -> None:
     terminal = CompanionTerminal()
 

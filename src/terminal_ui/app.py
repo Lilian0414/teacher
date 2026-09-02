@@ -395,7 +395,13 @@ class CompanionTerminal(App[None]):
             InteractionMode.REVIEW_COMPLETE,
         )
         self._workspace_splitter.display = visible
-        if visible and self.is_running:
+        if not visible and self.is_running:
+            transcript = self.query_one("#transcript")
+            transcript.styles.width = None
+            transcript.styles.height = None
+            self._practice_panel.styles.width = None
+            self._practice_panel.styles.height = None
+        elif self.is_running:
             self.call_after_refresh(self._apply_pane_ratio)
 
     def _apply_pane_ratio(self) -> None:
