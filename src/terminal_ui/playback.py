@@ -14,15 +14,23 @@ class SoundDevicePlaybackBackend:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stream: object | None = None
+        self._generation = 0
 
     def play(self, audio: bytes, *, sample_rate: int) -> None:
+        with self._lock:
+            generation = self._generation
         import sounddevice  # type: ignore[import-not-found]
 
         stream = sounddevice.RawOutputStream(
             samplerate=sample_rate, channels=1, dtype="int16"
         )
         with self._lock:
-            self._stream = stream
+            cancelled = generation != self._generation
+            if not cancelled:
+                self._stream = stream
+        if cancelled:
+            stream.close()
+            return
         try:
             stream.start()
             stream.write(audio)
@@ -34,6 +42,7 @@ class SoundDevicePlaybackBackend:
 
     def stop(self) -> None:
         with self._lock:
+            self._generation += 1
             stream = self._stream
         if stream is not None:
             stream.abort()  # type: ignore[attr-defined]
@@ -46,11 +55,14 @@ class AudioPlayer:
     def __init__(self, backend: PlaybackBackend | None = None) -> None:
         self._backend = backend or SoundDevicePlaybackBackend()
         self._task: asyncio.Task[None] | None = None
+        self._closed = False
         # A single worker preserves replacement order even though cancelling an
         # asyncio Future cannot terminate a thread already inside stream.write().
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audio-playback")
 
     def play(self, audio: bytes, *, sample_rate: int) -> None:
+        if self._closed:
+            return
         self.stop()
         self._task = asyncio.create_task(self._play(audio, sample_rate=sample_rate))
 
@@ -71,3 +83,11 @@ class AudioPlayer:
             self._backend.stop()
         except Exception:
             pass
+
+    def close(self) -> None:
+        """Stop playback and release the worker used by this player."""
+        if self._closed:
+            return
+        self._closed = True
+        self.stop()
+        self._executor.shutdown(wait=True, cancel_futures=True)

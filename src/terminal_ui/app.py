@@ -456,7 +456,7 @@ class CompanionTerminal(App[None]):
         self._gesture_adapter.stop()
         if self._synthesis_task is not None:
             self._synthesis_task.cancel()
-        self._audio_player.stop()
+        self._audio_player.close()
         if self._gesture_feedback_timer is not None:
             self._gesture_feedback_timer.cancel()
         await self._client.aclose()
