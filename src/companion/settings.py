@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -78,6 +78,15 @@ class Settings(BaseSettings):
             "ELEVENLABS_OUTPUT_FORMAT", "COMPANION_ELEVENLABS_OUTPUT_FORMAT"
         ),
     )
+
+    @field_validator("elevenlabs_output_format")
+    @classmethod
+    def validate_elevenlabs_output_format(cls, value: str) -> str:
+        from companion.speech import pcm_sample_rate
+
+        pcm_sample_rate(value)
+        return value
+
     elevenlabs_timeout_seconds: float = Field(
         default=30,
         gt=0,

@@ -45,6 +45,12 @@ def test_tts_defaults_to_disabled_adam_voice_and_eleven_v3() -> None:
     assert settings.elevenlabs_model == "eleven_v3"
 
 
+@pytest.mark.parametrize("output_format", ["mp3_44100_128", "ulaw_8000", "pcm_zero"])
+def test_tts_rejects_non_pcm_output_formats(output_format: str) -> None:
+    with pytest.raises(ValidationError, match="pcm_<sample_rate>"):
+        Settings(_env_file=None, elevenlabs_output_format=output_format)  # type: ignore[call-arg]
+
+
 def test_ordinary_settings_ignore_hostile_local_dotenv(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

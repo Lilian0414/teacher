@@ -8,9 +8,35 @@ from companion.providers.errors import (
     LLMTemporaryError,
     LLMTimeoutError,
 )
-from companion.speech import ElevenLabsSpeechSynthesizer
+from companion.speech import ElevenLabsSpeechSynthesizer, pcm_sample_rate
 
 HTTPX_ASYNC_CLIENT = httpx.AsyncClient
+
+
+@pytest.mark.parametrize(
+    ("output_format", "sample_rate"),
+    [("pcm_16000", 16000), ("pcm_24000", 24000), ("pcm_44100", 44100)],
+)
+def test_pcm_output_format_sample_rate(output_format: str, sample_rate: int) -> None:
+    assert pcm_sample_rate(output_format) == sample_rate
+
+
+@pytest.mark.parametrize("output_format", ["mp3_44100_128", "pcm_", "pcm_-1", "pcm_24k"])
+def test_pcm_output_format_rejects_unsupported_values(output_format: str) -> None:
+    with pytest.raises(ValueError, match="pcm_<sample_rate>"):
+        pcm_sample_rate(output_format)
+
+
+def test_elevenlabs_synthesizer_rejects_compressed_output_format() -> None:
+    with pytest.raises(ValueError, match="pcm_<sample_rate>"):
+        ElevenLabsSpeechSynthesizer(
+            api_key="test-secret",
+            voice_id="voice-id",
+            model="eleven_v3",
+            base_url="https://voice.invalid/v1/",
+            output_format="mp3_44100_128",
+            timeout_seconds=4,
+        )
 
 
 def synthesizer() -> ElevenLabsSpeechSynthesizer:

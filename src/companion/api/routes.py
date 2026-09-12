@@ -61,7 +61,7 @@ from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest
 from companion.schemas.availability import AvailabilityState, StateResponse
 from companion.settings import get_settings
-from companion.speech import SpeechSynthesizer, SpeechTranscriber
+from companion.speech import SpeechSynthesizer, SpeechTranscriber, pcm_sample_rate
 
 from .dependencies import (
     get_availability_service,
@@ -117,14 +117,12 @@ async def synthesize_speech(
         status = 429 if isinstance(exc, LLMRateLimitError) else 503
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     output_format = get_settings().elevenlabs_output_format
-    sample_rate = (
-        output_format.removeprefix("pcm_") if output_format.startswith("pcm_") else "24000"
-    )
+    sample_rate = pcm_sample_rate(output_format)
     return Response(
         content=audio,
         media_type="audio/L16",
         headers={
-            "X-Audio-Sample-Rate": sample_rate,
+            "X-Audio-Sample-Rate": str(sample_rate),
             "X-Audio-Channels": "1",
             "X-Audio-Sample-Format": "int16",
         },

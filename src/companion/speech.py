@@ -20,6 +20,18 @@ class SpeechSynthesizer(Protocol):
     async def synthesize(self, text: str) -> bytes: ...
 
 
+def pcm_sample_rate(output_format: str) -> int:
+    """Return the sample rate encoded by a raw 16-bit PCM output format."""
+    prefix = "pcm_"
+    value = output_format.removeprefix(prefix)
+    if not output_format.startswith(prefix) or not value.isascii() or not value.isdigit():
+        raise ValueError("ELEVENLABS_OUTPUT_FORMAT must be pcm_<sample_rate>")
+    sample_rate = int(value)
+    if sample_rate <= 0:
+        raise ValueError("ELEVENLABS_OUTPUT_FORMAT sample rate must be positive")
+    return sample_rate
+
+
 class ElevenLabsSpeechSynthesizer:
     def __init__(
         self,
@@ -31,6 +43,7 @@ class ElevenLabsSpeechSynthesizer:
         output_format: str,
         timeout_seconds: float,
     ) -> None:
+        pcm_sample_rate(output_format)
         self._api_key = api_key
         self._voice_id = voice_id
         self._model = model
