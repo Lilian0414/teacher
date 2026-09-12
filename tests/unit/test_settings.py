@@ -38,6 +38,13 @@ def test_default_groq_model_is_supported_replacement() -> None:
     assert Settings().groq_model == "openai/gpt-oss-20b"
 
 
+def test_tts_defaults_to_disabled_adam_voice_and_eleven_v3() -> None:
+    settings = Settings()
+    assert settings.tts_enabled is False
+    assert settings.elevenlabs_voice_id == "s3TPKV1kjDlVtZbl4Ksh"
+    assert settings.elevenlabs_model == "eleven_v3"
+
+
 def test_ordinary_settings_ignore_hostile_local_dotenv(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

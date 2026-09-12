@@ -1,7 +1,7 @@
 import asyncio
 from datetime import timedelta
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 from companion.api.schemas import (
     CommandRequest,
@@ -12,6 +12,7 @@ from companion.api.schemas import (
     ReviewSubmissionResponse,
     SendMessageRequest,
     SendMessageResponse,
+    SynthesisRequest,
     TranscriptionResponse,
 )
 from companion.availability import AvailabilityService, OverrideRequest
@@ -60,7 +61,7 @@ from companion.providers.protocols import LLMProvider
 from companion.providers.schemas import LanguageHelpMode, LanguageHelpRequest
 from companion.schemas.availability import AvailabilityState, StateResponse
 from companion.settings import get_settings
-from companion.speech import SpeechTranscriber
+from companion.speech import SpeechSynthesizer, SpeechTranscriber
 
 from .dependencies import (
     get_availability_service,
@@ -71,6 +72,7 @@ from .dependencies import (
     get_memory_service,
     get_preferences_service,
     get_proactive_service,
+    get_speech_synthesizer,
     get_speech_transcriber,
 )
 
@@ -83,6 +85,7 @@ LearningDependency = Depends(get_learning_service)
 ProactiveDependency = Depends(get_proactive_service)
 PreferencesDependency = Depends(get_preferences_service)
 SpeechDependency = Depends(get_speech_transcriber)
+SynthesisDependency = Depends(get_speech_synthesizer)
 
 
 @router.post("/v1/speech/transcriptions")
@@ -99,6 +102,33 @@ async def transcribe_audio(
         status = 429 if isinstance(exc, LLMRateLimitError) else 503
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return TranscriptionResponse(transcript=transcript)
+
+
+@router.post("/v1/speech/synthesis")
+async def synthesize_speech(
+    request: SynthesisRequest,
+    synthesizer: SpeechSynthesizer = SynthesisDependency,
+) -> Response:
+    if not request.text.strip():
+        raise HTTPException(status_code=422, detail="Speech synthesis text must not be blank")
+    try:
+        audio = await synthesizer.synthesize(request.text)
+    except LLMProviderError as exc:
+        status = 429 if isinstance(exc, LLMRateLimitError) else 503
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    output_format = get_settings().elevenlabs_output_format
+    sample_rate = (
+        output_format.removeprefix("pcm_") if output_format.startswith("pcm_") else "24000"
+    )
+    return Response(
+        content=audio,
+        media_type="audio/L16",
+        headers={
+            "X-Audio-Sample-Rate": sample_rate,
+            "X-Audio-Channels": "1",
+            "X-Audio-Sample-Format": "int16",
+        },
+    )
 
 
 @router.get("/v1/preferences")

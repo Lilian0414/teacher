@@ -23,7 +23,12 @@ from companion.providers.groq import GroqLLMProvider
 from companion.providers.protocols import LLMProvider
 from companion.schemas.availability import LLMStatus
 from companion.settings import get_settings
-from companion.speech import GroqSpeechTranscriber, SpeechTranscriber
+from companion.speech import (
+    ElevenLabsSpeechSynthesizer,
+    GroqSpeechTranscriber,
+    SpeechSynthesizer,
+    SpeechTranscriber,
+)
 
 
 def get_llm_status() -> LLMStatus:
@@ -87,6 +92,18 @@ def get_speech_transcriber() -> SpeechTranscriber:
         model=settings.groq_stt_model,
         base_url=settings.groq_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
+    )
+
+
+def get_speech_synthesizer() -> SpeechSynthesizer:
+    settings = get_settings()
+    return ElevenLabsSpeechSynthesizer(
+        api_key=settings.elevenlabs_api_key,
+        voice_id=settings.elevenlabs_voice_id,
+        model=settings.elevenlabs_model,
+        base_url=settings.elevenlabs_base_url,
+        output_format=settings.elevenlabs_output_format,
+        timeout_seconds=settings.elevenlabs_timeout_seconds,
     )
 
 

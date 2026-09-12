@@ -11,6 +11,7 @@ from companion.api.dependencies import (
     get_availability_service,
     get_learning_service,
     get_llm_provider,
+    get_speech_synthesizer,
     get_speech_transcriber,
 )
 from companion.api.routes import create_conversation
@@ -30,6 +31,12 @@ class FakeTranscriber:
         assert audio == b"wave"
         assert content_type == "audio/wav"
         return "I fell asleep."
+
+
+class FakeSynthesizer:
+    async def synthesize(self, text: str) -> bytes:
+        assert text == "Hello learner"
+        return b"raw-pcm"
 
 
 @pytest.mark.asyncio
@@ -88,6 +95,21 @@ def test_speech_transcription_endpoint_is_core_owned_and_non_mutating() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"transcript": "I fell asleep."}
+
+
+def test_speech_synthesis_endpoint_returns_pcm_metadata() -> None:
+    app = create_app()
+    app.dependency_overrides[get_speech_synthesizer] = lambda: FakeSynthesizer()
+
+    with TestClient(app) as client:
+        response = client.post("/v1/speech/synthesis", json={"text": "Hello learner"})
+
+    assert response.status_code == 200
+    assert response.content == b"raw-pcm"
+    assert response.headers["content-type"] == "audio/L16"
+    assert response.headers["x-audio-sample-rate"] == "24000"
+    assert response.headers["x-audio-channels"] == "1"
+    assert response.headers["x-audio-sample-format"] == "int16"
 
 
 def test_health_and_state_endpoints() -> None:

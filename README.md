@@ -266,6 +266,12 @@ cp .env.example .env
 
 在本機 `.env` 填入 `GROQ_API_KEY`，不要把真實 key commit 到 repository。
 
+若要讓 Teacher 朗讀 learner-facing 回覆，可在本機 `.env` 設定
+`TTS_ENABLED=true` 與 `ELEVENLABS_API_KEY`。預設使用 ElevenLabs 的 Adam
+(`s3TPKV1kjDlVtZbl4Ksh`)、`eleven_v3` 與 24 kHz mono PCM；voice、model、base URL、
+output format 與 timeout 都可用 `.env.example` 中的變數覆寫。API key 只由環境讀取，
+請勿 commit。TTS 或本機播放失敗不會影響文字互動。
+
 初始化資料庫：
 
 ```bash

@@ -52,6 +52,39 @@ class Settings(BaseSettings):
         default="whisper-large-v3-turbo",
         validation_alias=AliasChoices("GROQ_STT_MODEL", "COMPANION_GROQ_STT_MODEL"),
     )
+    tts_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("TTS_ENABLED", "COMPANION_TTS_ENABLED"),
+    )
+    elevenlabs_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ELEVENLABS_API_KEY", "COMPANION_ELEVENLABS_API_KEY"),
+    )
+    elevenlabs_base_url: str = Field(
+        default="https://api.elevenlabs.io/v1",
+        validation_alias=AliasChoices("ELEVENLABS_BASE_URL", "COMPANION_ELEVENLABS_BASE_URL"),
+    )
+    elevenlabs_voice_id: str = Field(
+        default="s3TPKV1kjDlVtZbl4Ksh",
+        validation_alias=AliasChoices("ELEVENLABS_VOICE_ID", "COMPANION_ELEVENLABS_VOICE_ID"),
+    )
+    elevenlabs_model: str = Field(
+        default="eleven_v3",
+        validation_alias=AliasChoices("ELEVENLABS_MODEL", "COMPANION_ELEVENLABS_MODEL"),
+    )
+    elevenlabs_output_format: str = Field(
+        default="pcm_24000",
+        validation_alias=AliasChoices(
+            "ELEVENLABS_OUTPUT_FORMAT", "COMPANION_ELEVENLABS_OUTPUT_FORMAT"
+        ),
+    )
+    elevenlabs_timeout_seconds: float = Field(
+        default=30,
+        gt=0,
+        validation_alias=AliasChoices(
+            "ELEVENLABS_TIMEOUT_SECONDS", "COMPANION_ELEVENLABS_TIMEOUT_SECONDS"
+        ),
+    )
     llm_timeout_seconds: float = Field(
         default=30,
         gt=0,
