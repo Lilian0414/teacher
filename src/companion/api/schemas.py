@@ -77,3 +77,7 @@ class ReviewSubmissionResponse(BaseModel):
 
 class TranscriptionResponse(BaseModel):
     transcript: str
+
+
+class SynthesisRequest(BaseModel):
+    text: str = Field(min_length=1)

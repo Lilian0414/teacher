@@ -27,6 +27,7 @@ from terminal_ui.gestures import (
     GestureUnavailableError,
     OpenCVMediaPipeGestureAdapter,
 )
+from terminal_ui.playback import AudioPlayer
 from terminal_ui.preview import Frame, LatestFrameBuffer, render_frame
 from terminal_ui.recording import MacMicrophoneRecorder, MicrophoneUnavailableError
 
@@ -228,6 +229,7 @@ class CompanionTerminal(App[None]):
         *,
         recording_limit_seconds: float = 30,
         gesture_adapter: GestureAdapter | None = None,
+        audio_player: AudioPlayer | None = None,
     ) -> None:
         super().__init__()
         self._core_url = (core_url or get_settings().core_url).rstrip("/")
@@ -236,6 +238,10 @@ class CompanionTerminal(App[None]):
             timeout=40.0,
             trust_env=False,
         )
+        self._tts_enabled = get_settings().tts_enabled
+        self._audio_player = audio_player or AudioPlayer()
+        self._synthesis_task: asyncio.Task[None] | None = None
+        self._tts_error_shown = False
         self._status = Static("Teacher is getting ready…", id="status")
         self._messages = RichLog(id="messages", wrap=True, markup=False, auto_scroll=False)
         self._new_messages = Button("↓ New messages — End: jump to latest", id="new-messages")
@@ -448,6 +454,9 @@ class CompanionTerminal(App[None]):
 
     async def on_unmount(self) -> None:
         self._gesture_adapter.stop()
+        if self._synthesis_task is not None:
+            self._synthesis_task.cancel()
+        self._audio_player.close()
         if self._gesture_feedback_timer is not None:
             self._gesture_feedback_timer.cancel()
         await self._client.aclose()
@@ -682,8 +691,12 @@ class CompanionTerminal(App[None]):
         result = cast(dict[str, Any], response.json())
         hints = result.get("hints")
         if isinstance(hints, list):
-            self._review_feedback.update("Hint: " + " · ".join(str(hint) for hint in hints))
-        self._write_message(self._format_command_result(result))
+            hint_text = "Hint: " + " · ".join(str(hint) for hint in hints)
+            self._review_feedback.update(hint_text)
+        content = self._format_command_result(result)
+        self._write_message(content)
+        if result.get("ok"):
+            self.speak_learner_text(content)
 
     async def action_finish_review(self) -> None:
         if self._mode == InteractionMode.REVIEW_ITEM_COMPLETE:
@@ -870,7 +883,10 @@ class CompanionTerminal(App[None]):
             return
         result = await self._post_command(f"/hint {content}")
         role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
-        self._write_message(self._format_command_result(result), role)
+        rendered = self._format_command_result(result)
+        self._write_message(rendered, role)
+        if result.get("ok"):
+            self.speak_learner_text(rendered)
         self._reset_to_normal()
 
     async def _run_help_capture(self, raw: str) -> None:
@@ -878,7 +894,10 @@ class CompanionTerminal(App[None]):
         self._pending_help_expression = None
         result = await self._post_command(f"/help {raw}")
         role = MessageRole.ERROR if result.get("ok") is False else None
-        self._write_message(self._format_command_result(result), role)
+        rendered = self._format_command_result(result)
+        self._write_message(rendered, role)
+        if result.get("ok"):
+            self.speak_learner_text(rendered)
         suggestion = result.get("natural_expression") or result.get("correction")
         if (
             result.get("ok")
@@ -896,7 +915,10 @@ class CompanionTerminal(App[None]):
     async def _run_hint_capture(self, raw: str) -> None:
         result = await self._post_command(f"/hint {raw}")
         role = MessageRole.ERROR if result.get("ok") is False else MessageRole.HINT
-        self._write_message(self._format_command_result(result), role)
+        rendered = self._format_command_result(result)
+        self._write_message(rendered, role)
+        if result.get("ok"):
+            self.speak_learner_text(rendered)
         self._reset_to_normal()
 
     def _begin_capture(self, mode: InteractionMode) -> None:
@@ -1267,6 +1289,32 @@ class CompanionTerminal(App[None]):
     def _write_assistant(self, content: str) -> None:
         """Render assistant Markdown without changing its canonical content."""
         self._write_message(content, MessageRole.ASSISTANT, markdown=True)
+        self.speak_learner_text(content)
+
+    def speak_learner_text(self, content: str) -> None:
+        """Start optional TTS after text is visible, replacing an older utterance."""
+        if not self._tts_enabled or not content.strip():
+            return
+        if self._synthesis_task is not None:
+            self._synthesis_task.cancel()
+        self._audio_player.stop()
+        self._synthesis_task = asyncio.create_task(self._synthesize_and_play(content.strip()))
+
+    async def _synthesize_and_play(self, content: str) -> None:
+        try:
+            response = await self._client.post("/v1/speech/synthesis", json={"text": content})
+            response.raise_for_status()
+            sample_rate = int(response.headers.get("x-audio-sample-rate", "24000"))
+            self._audio_player.play(response.content, sample_rate=sample_rate)
+        except asyncio.CancelledError:
+            return
+        except (httpx.HTTPError, ValueError):
+            if not self._tts_error_shown:
+                self._tts_error_shown = True
+                self._write_message(
+                    "[system] Voice playback is unavailable; text remains available.",
+                    MessageRole.ERROR,
+                )
 
     async def _respond_to_invitation(self, decision: str) -> None:
         invitation = self._pending_invitation
@@ -1443,7 +1491,9 @@ class CompanionTerminal(App[None]):
             result_role = MessageRole.SUCCESS
         else:
             result_role = MessageRole.INCORRECT
-        self._write_message(self._format_review_result(result), result_role)
+        rendered = self._format_review_result(result)
+        self._write_message(rendered, result_role)
+        self.speak_learner_text(rendered)
         if result.get("grading_deferred") is True:
             return
         next_question = result.get("next_question")
@@ -1803,7 +1853,10 @@ class CompanionTerminal(App[None]):
     ) -> None:
         """Render command output as semantic messages, including mixed-role results."""
         if payload.get("command") != "say":
-            self._write_message(self._format_command_result(payload), role)
+            content = self._format_command_result(payload)
+            self._write_message(content, role)
+            if payload.get("ok") and payload.get("command") in {"help", "hint", "review"}:
+                self.speak_learner_text(content)
             return
 
         inserted = payload.get("inserted_text")
@@ -1811,7 +1864,7 @@ class CompanionTerminal(App[None]):
             self._write_message(str(inserted), MessageRole.USER)
         assistant = payload.get("assistant_message")
         if isinstance(assistant, dict) and assistant.get("content") is not None:
-            self._write_message(str(assistant["content"]), MessageRole.ASSISTANT)
+            self._write_assistant(str(assistant["content"]))
         assistant_error = payload.get("assistant_error")
         if assistant_error:
             self._write_message(f"Assistant reply failed: {assistant_error}", MessageRole.ERROR)
