@@ -5,48 +5,43 @@ from typing import Protocol
 
 
 class PlaybackBackend(Protocol):
-    def play(self, audio: bytes, *, sample_rate: int) -> None: ...
-
-    def stop(self) -> None: ...
+    def play(
+        self, audio: bytes, *, sample_rate: int, cancelled: threading.Event
+    ) -> None: ...
 
 
 class SoundDevicePlaybackBackend:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._stream: object | None = None
-        self._generation = 0
+    """Play PCM while keeping every native stream operation on one worker."""
 
-    def play(self, audio: bytes, *, sample_rate: int) -> None:
-        with self._lock:
-            generation = self._generation
+    _CHUNK_DURATION_SECONDS = 0.02
+    _SAMPLE_WIDTH = 2
+
+    def play(
+        self, audio: bytes, *, sample_rate: int, cancelled: threading.Event
+    ) -> None:
+        if cancelled.is_set():
+            return
+
         import sounddevice  # type: ignore[import-not-found]
 
         stream = sounddevice.RawOutputStream(
             samplerate=sample_rate, channels=1, dtype="int16"
         )
-        with self._lock:
-            cancelled = generation != self._generation
-            if not cancelled:
-                self._stream = stream
-        if cancelled:
-            stream.close()
-            return
         try:
+            if cancelled.is_set():
+                return
             stream.start()
-            stream.write(audio)
+            chunk_size = max(
+                self._SAMPLE_WIDTH,
+                int(sample_rate * self._CHUNK_DURATION_SECONDS) * self._SAMPLE_WIDTH,
+            )
+            for offset in range(0, len(audio), chunk_size):
+                if cancelled.is_set():
+                    break
+                stream.write(audio[offset : offset + chunk_size])
+            stream.stop()
         finally:
-            with self._lock:
-                if self._stream is stream:
-                    self._stream = None
             stream.close()
-
-    def stop(self) -> None:
-        with self._lock:
-            self._generation += 1
-            stream = self._stream
-        if stream is not None:
-            stream.abort()  # type: ignore[attr-defined]
-            stream.close()  # type: ignore[attr-defined]
 
 
 class AudioPlayer:
@@ -55,37 +50,45 @@ class AudioPlayer:
     def __init__(self, backend: PlaybackBackend | None = None) -> None:
         self._backend = backend or SoundDevicePlaybackBackend()
         self._task: asyncio.Task[None] | None = None
+        self._cancellation: threading.Event | None = None
         self._closed = False
-        # A single worker preserves replacement order even though cancelling an
-        # asyncio Future cannot terminate a thread already inside stream.write().
+        # One worker ensures a cancelled utterance exits before its replacement starts.
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audio-playback")
 
     def play(self, audio: bytes, *, sample_rate: int) -> None:
         if self._closed:
             return
         self.stop()
-        self._task = asyncio.create_task(self._play(audio, sample_rate=sample_rate))
+        cancellation = threading.Event()
+        self._cancellation = cancellation
+        self._task = asyncio.create_task(
+            self._play(audio, sample_rate=sample_rate, cancelled=cancellation)
+        )
 
-    async def _play(self, audio: bytes, *, sample_rate: int) -> None:
+    async def _play(
+        self, audio: bytes, *, sample_rate: int, cancelled: threading.Event
+    ) -> None:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
-                self._executor, lambda: self._backend.play(audio, sample_rate=sample_rate)
+                self._executor,
+                lambda: self._backend.play(
+                    audio, sample_rate=sample_rate, cancelled=cancelled
+                ),
             )
         except (Exception, asyncio.CancelledError):
             return
 
     def stop(self) -> None:
+        if self._cancellation is not None:
+            self._cancellation.set()
+            self._cancellation = None
         if self._task is not None:
             self._task.cancel()
             self._task = None
-        try:
-            self._backend.stop()
-        except Exception:
-            pass
 
     def close(self) -> None:
-        """Stop playback and release the worker used by this player."""
+        """Signal cancellation, wait for native cleanup, and release the worker."""
         if self._closed:
             return
         self._closed = True
