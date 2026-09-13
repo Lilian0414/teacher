@@ -18,8 +18,8 @@ When behavior or requirements are unclear, inspect repository evidence first. Do
 Default ownership is:
 
 - **User**: product direction and final decisions.
-- **ChatGPT/planner**: requirement clarification, repository inspection, architecture judgment, GitHub Issue/spec writing, work ordering, Codex delegation, PR review, CI/UAT judgment, and direct implementation only when the user explicitly assigns it.
-- **Codex**: repository implementation, repository-native verification, and commit creation for tasks explicitly delegated to Codex.
+- **ChatGPT/planner**: requirement clarification, repository inspection, architecture judgment, GitHub Issue/spec writing, work ordering, Codex delegation, GitHub branch/PR publication orchestration, PR review, CI/UAT judgment, and direct implementation only when the user explicitly assigns it.
+- **Codex**: repository implementation, repository-native verification, commit creation, and publication of its implementation branch when the active Codex environment has a usable Git remote and push permission.
 
 Use one active implementation writer per coherent task. Do not silently replace an assigned writer because publication, review, or CI is delayed.
 
@@ -35,14 +35,17 @@ OpenSpec may be used when it adds useful design detail, but it must not create a
 
 For tasks explicitly delegated to Codex, use:
 
-`inspect → implement → verify → commit → report → STOP`
+`inspect → confirm publication path → implement → verify → commit → publish branch when possible → report → STOP`
 
 Before editing, Codex must:
 
 - read the linked Issue/spec and these repository instructions;
 - confirm the requested base branch/SHA;
 - inspect the relevant current code, tests, migrations, and runtime boundaries;
-- check whether valid equivalent implementation work already exists.
+- check whether valid equivalent implementation work already exists;
+- inspect the active checkout's Git publication path, including `git remote -v`, the current branch, and whether a GitHub-visible branch can be pushed from this environment.
+
+For an initial implementation where no PR exists yet, if there is no usable remote/push path and the task expects a durable GitHub handoff, STOP before editing and report that publication blocker unless the user explicitly permits a local-only implementation. Do not knowingly create implementation work that will exist only in a disposable sandbox when a GitHub-visible handoff is required.
 
 During implementation:
 
@@ -50,7 +53,10 @@ During implementation:
 - preserve unrelated behavior and user changes;
 - do not broaden scope or perform unrelated refactors;
 - run the strongest applicable repository-native checks;
-- commit completed work and report the commit SHA, branch/task ref when available, checks actually run, and any unverified layer.
+- commit completed work;
+- after commit, if the active environment has a usable remote and push permission, publish the same implementation branch to GitHub before stopping;
+- report the commit SHA, local branch, GitHub-visible branch/head when publication succeeds, checks actually run, and any unverified layer;
+- if publication fails after a valid commit, preserve the completed work and report the exact publication blocker. Do not reimplement the task merely because publication failed.
 
 ### Codex routing: initial implementation vs PR follow-up
 
@@ -60,8 +66,9 @@ Choose the Codex trigger location from the current lifecycle state. Do not use t
 
 - trigger Codex from the GitHub Issue/spec;
 - work from the explicitly requested base branch/SHA, normally `main@<sha>`;
-- implement and verify the scoped task, commit it, report, and stop;
-- the user publishes that completed implementation as a PR.
+- confirm a usable publication path before editing when a GitHub-visible handoff is expected;
+- implement and verify the scoped task, commit it, publish the implementation branch when the environment permits, report the GitHub-visible branch/head, and stop;
+- do **not** create the pull request itself. Once the branch is GitHub-visible, ChatGPT/planner may create the PR through the GitHub connector and continue independent review.
 
 **PR review follow-up (a PR already exists):**
 
@@ -69,20 +76,23 @@ Choose the Codex trigger location from the current lifecycle state. Do not use t
 - treat the current PR head/branch as the implementation baseline and continue the same implementation writer/task;
 - do not reset to `main`, do not reconstruct the implementation from the Issue's original base SHA, and do not create a duplicate implementation branch or PR;
 - before editing, confirm the checkout contains the current PR head (or the PR context has supplied an equivalent checked-out head). If the current PR head is unavailable, STOP and report the checkout/context blocker instead of rebuilding from base;
-- apply only the review-requested correction, verify it, commit it on the existing PR branch, report the new head/commit, and stop.
+- apply only the review-requested correction, verify it, commit it on the existing PR branch, push/publish that follow-up commit to the same GitHub-visible PR branch when the environment permits, report the new head/commit, and stop;
+- if the existing PR branch cannot be updated from the active environment, report the publication blocker instead of opening another branch or recreating the task.
 
-After a PR follow-up commit appears, ChatGPT/planner must re-fetch the PR's current head SHA, independently review the new GitHub-visible diff, and accept CI only when the CI run corresponds to that exact current head SHA.
+After a PR follow-up commit appears on GitHub, ChatGPT/planner must re-fetch the PR's current head SHA, independently review the new GitHub-visible diff, and accept CI only when the CI run corresponds to that exact current head SHA.
 
 Hard stop rules for Codex-delegated work:
 
 - **Do not create a pull request.**
-- **Do not attempt PR publication or publication recovery.**
 - **Do not merge.**
-- A valid completed implementation commit is `implementation complete` even when no PR exists yet.
-- A missing or failed PR publication step is not an implementation failure and is not a reason to reimplement valid work.
-- When review findings require code changes, return them to the same Codex implementation writer/task where practical, using the existing PR conversation once a PR exists, then verify and commit the fix before stopping again.
+- Publishing the current implementation branch is allowed and preferred when the active environment has a usable remote and push permission.
+- Do not start a separate publication-recovery implementation in a fresh sandbox if the original commit is unavailable there; report that the original work is inaccessible instead of reconstructing it implicitly.
+- A valid completed local implementation commit is `implementation complete (local)` even when no GitHub-visible branch exists, but it is not yet a durable GitHub handoff.
+- A GitHub-visible implementation branch is the preferred handoff state before PR creation.
+- A failed publication step is not an implementation correctness failure and is not a reason to reimplement valid work unless the user explicitly authorizes a new implementation.
+- When review findings require code changes, return them to the same Codex implementation writer/task where practical, using the existing PR conversation once a PR exists, then verify, commit, and publish the fix to the same PR branch before stopping again.
 
-The user publishes Codex work as a PR manually unless they explicitly change that workflow. Updating the already-existing PR branch during a PR review follow-up is continuation of the same implementation, not creation/publication of a new PR.
+Once Codex work is GitHub-visible, ChatGPT/planner may create the PR, independently review the exact GitHub-visible diff/head, inspect CI for that exact head, and coordinate follow-up. The user does not need to manually create the PR unless they prefer to.
 
 ## ChatGPT direct implementation
 
@@ -106,7 +116,7 @@ If PR review finds a code issue in Codex-owned work, route the follow-up from th
 
 Always distinguish these states:
 
-`implementation complete` → `PR available` → `current-head CI green` → `UAT passed` → `merged`
+`implementation complete (local)` → `GitHub-visible branch` → `PR available` → `current-head CI green` → `UAT passed` → `merged`
 
 Do not collapse them into a generic "done" state.
 
