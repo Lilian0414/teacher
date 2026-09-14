@@ -2593,6 +2593,117 @@ def test_say_result_renders_distinct_semantic_user_and_assistant_messages() -> N
     assert "cyan" in str(assistant.style)
 
 
+def test_speech_policy_selects_only_short_unstructured_chat() -> None:
+    assert CompanionTerminal._ordinary_chat_spoken_text("Nice work today!") == (
+        "Nice work today!"
+    )
+    assert CompanionTerminal._ordinary_chat_spoken_text("x" * 301) is None
+    assert CompanionTerminal._ordinary_chat_spoken_text("First paragraph\nSecond paragraph") is None
+    assert CompanionTerminal._ordinary_chat_spoken_text("- first\n- second") is None
+    assert CompanionTerminal._ordinary_chat_spoken_text("```python\npass\n```") is None
+
+
+def test_structured_command_speech_uses_only_narrow_learner_fields() -> None:
+    terminal = make_terminal()
+    spoken: list[str] = []
+    cast(Any, terminal).speak_learner_text = spoken.append
+
+    terminal._write_command_result(
+        {
+            "command": "help",
+            "ok": True,
+            "natural_expression": "I skipped class today.",
+            "alternatives": ["I ditched class."],
+            "notes_zh": "中文說明",
+        }
+    )
+    terminal._write_command_result(
+        {"command": "hint", "ok": True, "hints": ["Think of tired.", "Use an adjective."]}
+    )
+    terminal._write_command_result(
+        {
+            "command": "say",
+            "ok": True,
+            "inserted_text": "I am tired today.",
+            "assistant_message": {"content": "Here is a detailed follow-up."},
+        }
+    )
+
+    assert spoken == ["I skipped class today.", "Think of tired.", "I am tired today."]
+
+
+def test_help_speech_falls_back_to_clean_correction_or_silence() -> None:
+    assert CompanionTerminal._help_spoken_text(
+        {"correction": "I am very tired today.", "notes_zh": "中文說明"}
+    ) == "I am very tired today."
+    assert CompanionTerminal._help_spoken_text({"notes_zh": "中文說明"}) == ""
+
+
+def test_review_entry_speaks_prompt_once_without_refresh_metadata() -> None:
+    terminal = make_terminal()
+    spoken: list[str] = []
+    cast(Any, terminal).speak_learner_text = spoken.append
+
+    terminal._enter_review(
+        "secret-item-id", position=2, total=4, prompt="Translate: 我很累"
+    )
+    terminal._refresh_practice_panel()
+
+    assert spoken == ["Translate: 我很累"]
+
+
+def test_final_review_completion_speaks_short_completion_copy() -> None:
+    terminal = make_terminal()
+    spoken: list[str] = []
+    cast(Any, terminal).speak_learner_text = spoken.append
+    terminal._mode = InteractionMode.REVIEW
+    terminal._held_next_question = None
+
+    terminal._enter_review_acknowledgement()
+
+    assert spoken == ["Review complete. Nice work!"]
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"correct": False}, "Not quite. Try again."),
+        ({"correct": True}, "Correct!"),
+        (
+            {"grading_deferred": True},
+            "I couldn't grade that confidently. Try another wording.",
+        ),
+    ],
+)
+def test_review_spoken_feedback_never_exposes_review_metadata(
+    result: dict[str, Any], expected: str
+) -> None:
+    result.update(
+        accepted_answers=["SECRET ANSWER"],
+        stage=4,
+        next_review_at="2099-01-01T00:00:00Z",
+        feedback="Submitted SECRET ANSWER",
+    )
+
+    spoken = CompanionTerminal._review_spoken_feedback(result)
+
+    assert spoken == expected
+    assert all(value not in spoken for value in ("SECRET", "stage", "2099"))
+
+
+def test_system_status_error_and_proactive_rendering_do_not_trigger_speech() -> None:
+    terminal = make_terminal()
+    spoken: list[str] = []
+    cast(Any, terminal).speak_learner_text = spoken.append
+
+    terminal._write_message("[system] Ready.")
+    terminal._write_message("Status details", MessageRole.NEUTRAL)
+    terminal._write_message("Provider failed", MessageRole.ERROR)
+    terminal._invitation.update("Practice invitation\nReady for a short conversation?")
+
+    assert spoken == []
+
+
 @pytest.mark.asyncio
 async def test_transcript_navigation_keeps_input_focus_and_end_returns_latest() -> None:
     terminal = CompanionTerminal()

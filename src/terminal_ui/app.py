@@ -696,7 +696,7 @@ class CompanionTerminal(App[None]):
         content = self._format_command_result(result)
         self._write_message(content)
         if result.get("ok"):
-            self.speak_learner_text(content)
+            self.speak_learner_text(self._hint_spoken_text(result))
 
     async def action_finish_review(self) -> None:
         if self._mode == InteractionMode.REVIEW_ITEM_COMPLETE:
@@ -886,7 +886,7 @@ class CompanionTerminal(App[None]):
         rendered = self._format_command_result(result)
         self._write_message(rendered, role)
         if result.get("ok"):
-            self.speak_learner_text(rendered)
+            self.speak_learner_text(self._hint_spoken_text(result))
         self._reset_to_normal()
 
     async def _run_help_capture(self, raw: str) -> None:
@@ -897,7 +897,7 @@ class CompanionTerminal(App[None]):
         rendered = self._format_command_result(result)
         self._write_message(rendered, role)
         if result.get("ok"):
-            self.speak_learner_text(rendered)
+            self.speak_learner_text(self._help_spoken_text(result))
         suggestion = result.get("natural_expression") or result.get("correction")
         if (
             result.get("ok")
@@ -918,7 +918,7 @@ class CompanionTerminal(App[None]):
         rendered = self._format_command_result(result)
         self._write_message(rendered, role)
         if result.get("ok"):
-            self.speak_learner_text(rendered)
+            self.speak_learner_text(self._hint_spoken_text(result))
         self._reset_to_normal()
 
     def _begin_capture(self, mode: InteractionMode) -> None:
@@ -973,6 +973,8 @@ class CompanionTerminal(App[None]):
         self._input.placeholder = "Answer the review question..."
         self._after_mode_change()
         self._focus_input()
+        if prompt:
+            self.speak_learner_text(prompt)
 
     def _after_mode_change(self) -> None:
         self._refresh_action_buttons()
@@ -1286,10 +1288,50 @@ class CompanionTerminal(App[None]):
             # A terminal cue is best-effort and must never hide a presented invitation.
             return
 
-    def _write_assistant(self, content: str) -> None:
+    def _write_assistant(self, content: str, *, auto_speak: bool = True) -> None:
         """Render assistant Markdown without changing its canonical content."""
         self._write_message(content, MessageRole.ASSISTANT, markdown=True)
-        self.speak_learner_text(content)
+        if auto_speak and self._ordinary_chat_spoken_text(content) is not None:
+            self.speak_learner_text(content)
+
+    @staticmethod
+    def _ordinary_chat_spoken_text(content: str) -> str | None:
+        """Select complete, short conversational replies for automatic speech."""
+        stripped = content.strip()
+        if not stripped or len(stripped) > 300 or "\n" in stripped:
+            return None
+        structured_markers = ("`", "#", "- ", "* ", "> ", "|", "[", "](")
+        if any(marker in stripped for marker in structured_markers):
+            return None
+        prefix, separator, _ = stripped.partition(". ")
+        if separator and prefix.isdigit():
+            return None
+        return stripped
+
+    @staticmethod
+    def _help_spoken_text(payload: dict[str, Any]) -> str:
+        for field in ("natural_expression", "correction"):
+            value = payload.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _hint_spoken_text(payload: dict[str, Any]) -> str:
+        hints = payload.get("hints")
+        if isinstance(hints, list):
+            for hint in hints:
+                if isinstance(hint, str) and hint.strip():
+                    return hint.strip()
+        return ""
+
+    @staticmethod
+    def _review_spoken_feedback(result: dict[str, Any]) -> str:
+        if result.get("grading_deferred") is True:
+            return "I couldn't grade that confidently. Try another wording."
+        if result.get("correct") is True:
+            return "Correct!"
+        return "Not quite. Try again."
 
     def speak_learner_text(self, content: str) -> None:
         """Start optional TTS after text is visible, replacing an older utterance."""
@@ -1493,7 +1535,7 @@ class CompanionTerminal(App[None]):
             result_role = MessageRole.INCORRECT
         rendered = self._format_review_result(result)
         self._write_message(rendered, result_role)
-        self.speak_learner_text(rendered)
+        self.speak_learner_text(self._review_spoken_feedback(result))
         if result.get("grading_deferred") is True:
             return
         next_question = result.get("next_question")
@@ -1510,6 +1552,7 @@ class CompanionTerminal(App[None]):
             self._mode = InteractionMode.REVIEW_COMPLETE
             self._input.placeholder = "Press Finish or give a thumbs-up..."
             self._write_message("Item complete — press Finish or give a thumbs-up.")
+            self.speak_learner_text("Review complete. Nice work!")
         else:
             self._mode = InteractionMode.REVIEW_ITEM_COMPLETE
             self._input.placeholder = "Press Next or give a thumbs-up..."
@@ -1855,16 +1898,19 @@ class CompanionTerminal(App[None]):
         if payload.get("command") != "say":
             content = self._format_command_result(payload)
             self._write_message(content, role)
-            if payload.get("ok") and payload.get("command") in {"help", "hint", "review"}:
-                self.speak_learner_text(content)
+            if payload.get("ok") and payload.get("command") == "help":
+                self.speak_learner_text(self._help_spoken_text(payload))
+            elif payload.get("ok") and payload.get("command") == "hint":
+                self.speak_learner_text(self._hint_spoken_text(payload))
             return
 
         inserted = payload.get("inserted_text")
         if inserted:
             self._write_message(str(inserted), MessageRole.USER)
+            self.speak_learner_text(str(inserted))
         assistant = payload.get("assistant_message")
         if isinstance(assistant, dict) and assistant.get("content") is not None:
-            self._write_assistant(str(assistant["content"]))
+            self._write_assistant(str(assistant["content"]), auto_speak=False)
         assistant_error = payload.get("assistant_error")
         if assistant_error:
             self._write_message(f"Assistant reply failed: {assistant_error}", MessageRole.ERROR)
