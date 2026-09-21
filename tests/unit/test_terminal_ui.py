@@ -402,11 +402,45 @@ async def test_leaving_resized_review_restores_normal_transcript_size(
 
         assert not terminal._practice_panel.display
         assert not splitter.display
-        assert transcript.styles.width is None
-        assert transcript.styles.height is None
+        assert transcript.styles.inline.width is None
+        assert transcript.styles.inline.height is None
+        assert terminal._practice_panel.styles.inline.width is None
+        assert terminal._practice_panel.styles.inline.height is None
         assert transcript.region.width == workspace.region.width
         assert transcript.region.height == workspace.region.height
         assert terminal._pane_ratio == resized_ratio
+
+
+@pytest.mark.asyncio
+async def test_repeated_resize_then_immediate_review_exit_clears_deferred_sizing() -> None:
+    terminal = CompanionTerminal()
+
+    async def skip_startup() -> None:
+        return None
+
+    terminal.on_mount = skip_startup  # type: ignore[method-assign]
+    async with terminal.run_test(size=(120, 40)) as pilot:
+        terminal._hide_invitation()
+        terminal._enter_review("item-1", prompt="Answer me")
+        await pilot.pause()
+        transcript = terminal.query_one("#transcript")
+        workspace = terminal.query_one("#workspace")
+
+        await pilot.resize_terminal(80, 40)
+        await pilot.resize_terminal(120, 40)
+        await pilot.resize_terminal(80, 40)
+        # Leave Review before deferred post-refresh sizing callbacks execute.
+        terminal._reset_to_normal()
+        await pilot.pause()
+
+        assert terminal._mode == InteractionMode.NORMAL
+        assert not terminal.has_class("compact")
+        assert not terminal._workspace_splitter.display
+        assert transcript.styles.inline.width is None
+        assert transcript.styles.inline.height is None
+        assert terminal._practice_panel.styles.inline.width is None
+        assert terminal._practice_panel.styles.inline.height is None
+        assert transcript.region == workspace.region
 
 
 @pytest.mark.asyncio

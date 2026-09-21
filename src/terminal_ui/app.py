@@ -385,33 +385,49 @@ class CompanionTerminal(App[None]):
         self._update_workspace_layout()
 
     def _update_workspace_layout(self) -> None:
-        compact = (
-            self.size.width < 90
-            and self._mode
-            in (
-                InteractionMode.REVIEW,
-                InteractionMode.REVIEW_ITEM_COMPLETE,
-                InteractionMode.REVIEW_COMPLETE,
-            )
-        )
-        self.set_class(compact, "compact")
         visible = self._mode in (
             InteractionMode.REVIEW,
             InteractionMode.REVIEW_ITEM_COMPLETE,
             InteractionMode.REVIEW_COMPLETE,
         )
+        compact = (
+            self.size.width < 90
+            and visible
+        )
+        orientation_changed = compact != self.has_class("compact")
+        self.set_class(compact, "compact")
         self._workspace_splitter.display = visible
-        if not visible and self.is_running:
-            transcript = self.query_one("#transcript")
-            transcript.styles.width = None
-            transcript.styles.height = None
-            self._practice_panel.styles.width = None
-            self._practice_panel.styles.height = None
-        elif self.is_running:
+        if not self.is_running:
+            return
+        if not visible:
+            self._clear_pane_constraints()
+        else:
+            # Do not leave dimensions from the previous orientation active for
+            # the frame before the deferred ratio application. Real terminals
+            # repaint that intermediate layout and can retain visual remnants.
+            if orientation_changed:
+                self._clear_pane_constraints()
             self.call_after_refresh(self._apply_pane_ratio)
+
+    def _clear_pane_constraints(self) -> None:
+        """Remove review-only inline sizing and restore stylesheet layout."""
+        transcript = self.query_one("#transcript")
+        transcript.styles.width = None
+        transcript.styles.height = None
+        self._practice_panel.styles.width = None
+        self._practice_panel.styles.height = None
 
     def _apply_pane_ratio(self) -> None:
         """Apply and clamp the session-local ratio to the current orientation."""
+        if self._mode not in (
+            InteractionMode.REVIEW,
+            InteractionMode.REVIEW_ITEM_COMPLETE,
+            InteractionMode.REVIEW_COMPLETE,
+        ):
+            # A callback queued during Review may run after Review has closed.
+            # Never let it restore review-only dimensions to normal mode.
+            self._clear_pane_constraints()
+            return
         workspace = self.query_one("#workspace")
         transcript = self.query_one("#transcript")
         compact = self.has_class("compact")
