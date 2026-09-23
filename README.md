@@ -407,4 +407,6 @@ git diff --check
 - [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md) — 系統架構、資料流與模組責任
 - [`doc/FINAL_UAT.md`](doc/FINAL_UAT.md) — 實機驗收摘要
 - [`doc/LEARNER_PREFERENCES.md`](doc/LEARNER_PREFERENCES.md) — learner preferences
+- [`doc/history/`](doc/history/) — milestone 與 2026-09-02 歷史快照（非目前狀態）
+- [`doc/plans/`](doc/plans/) — Issue 執行計畫（歷史任務紀錄）
 - [`openspec/`](openspec/) — 已規格化的系統行為與歷史變更

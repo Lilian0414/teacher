@@ -171,4 +171,6 @@ restart / persistence behavior
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)：技術架構與資料流
 - [`FINAL_UAT.md`](FINAL_UAT.md)：release acceptance record
 - [`LEARNER_PREFERENCES.md`](LEARNER_PREFERENCES.md)：偏好設定
+- [`history/`](history/)：歷史 milestone 與實作快照（非目前能力基準）
+- [`plans/`](plans/)：Issue 執行計畫（非目前 release status）
 - [`../openspec/`](../openspec/)：系統規格與變更記錄

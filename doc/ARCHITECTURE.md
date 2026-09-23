@@ -303,7 +303,8 @@ teacher/
 │   ├── ARCHITECTURE.md
 │   ├── FINAL_UAT.md
 │   ├── LEARNER_PREFERENCES.md
-│   └── M0_...M4_*.md
+│   ├── history/              # milestone / dated snapshots
+│   └── plans/                # historical Issue handoffs
 ├── openspec/
 ├── migrations/
 ├── src/
@@ -340,6 +341,4 @@ teacher/
 
 ## Current Release Boundary
 
-目前 v0.1.0 已完成並驗收的範圍是：local-first AI English Learning Companion、Textual UI、persistent learning loop、memory、review、proactive practice、speech review、local gesture/camera interaction。
-
-目前不是：background OS agent、通用 vision system、多使用者 cloud SaaS、外部工具自動化平台或 autonomous browser agent。
+The current release capability matrix and product boundary are maintained in [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md). Target-Mac acceptance observations are in [FINAL_UAT.md](FINAL_UAT.md). This document owns architecture and state boundaries.

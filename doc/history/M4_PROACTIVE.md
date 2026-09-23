@@ -1,3 +1,5 @@
+> **Historical snapshot / superseded status.** This document records the scope at its original milestone. For current capabilities use [PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md); for current architecture use [ARCHITECTURE.md](../ARCHITECTURE.md). Do not infer present release status from this file.
+
 # M4: In-app proactive practice
 
 M4 lets the running Textual app offer low-pressure review or conversation practice. Core owns all
