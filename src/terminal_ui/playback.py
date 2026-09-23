@@ -22,7 +22,7 @@ class SoundDevicePlaybackBackend:
         if cancelled.is_set():
             return
 
-        import sounddevice  # type: ignore[import-not-found]
+        import sounddevice
 
         stream = sounddevice.RawOutputStream(
             samplerate=sample_rate, channels=1, dtype="int16"

@@ -41,7 +41,7 @@ class MacMicrophoneRecorder:
             self._frames.clear()
             self._state = RecorderState.RECORDING
         try:
-            import sounddevice  # type: ignore[import-not-found]
+            import sounddevice
 
             stream = sounddevice.RawInputStream(
                 samplerate=self._sample_rate,

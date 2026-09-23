@@ -135,8 +135,8 @@ def _gesture_worker(
     capture: Any | None = None
     try:
         try:
-            import cv2  # type: ignore[import-not-found]
-            import mediapipe as mp  # type: ignore[import-not-found]
+            import cv2
+            import mediapipe as mp
         except ImportError as exc:
             send(("error", GestureFailure.DEPENDENCY_MISSING.value, str(exc)))
             return
