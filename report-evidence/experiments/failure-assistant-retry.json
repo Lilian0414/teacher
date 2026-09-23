@@ -1,0 +1,25 @@
+{
+  "conversation_id": "1f8a24e5-ce21-40f5-b4f9-41a1cd8651c4",
+  "first_attempt": {
+    "ok": false,
+    "retryable": true,
+    "assistant_message_present": false,
+    "error": "Intentional fail-once UAT assistant failure"
+  },
+  "retry": {
+    "ok": true,
+    "retryable": false,
+    "assistant_message_present": true,
+    "error": null
+  },
+  "persisted_message_counts": {
+    "assistant": 1,
+    "user": 1
+  },
+  "pass_conditions": {
+    "first_failed_truthfully": true,
+    "retry_succeeded": true,
+    "no_duplicate_user_turn": true
+  },
+  "overall_pass": true
+}
