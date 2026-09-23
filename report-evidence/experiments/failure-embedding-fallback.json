@@ -1,0 +1,10 @@
+{
+  "target_memory": "Drinks black coffee before early classes.",
+  "query": "black coffee",
+  "embedding_endpoint": "intentionally unreachable",
+  "target_found": true,
+  "selected_count": 1,
+  "latency_ms": 42.1,
+  "fallback_path": "lexical/person",
+  "overall_pass": true
+}
