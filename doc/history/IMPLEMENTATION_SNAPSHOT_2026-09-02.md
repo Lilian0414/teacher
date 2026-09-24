@@ -1,3 +1,5 @@
+> **Historical snapshot / superseded status.** This document records the scope at its original milestone. For current capabilities use [PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md); for current architecture use [ARCHITECTURE.md](../ARCHITECTURE.md). Do not infer present release status from this file.
+
 以下重建以目前可用 checkout 為準：
 
 - 工作分支：`docs/architecture-research-foundations@afc9be5`
