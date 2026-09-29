@@ -1,12 +1,12 @@
-# Teacher — 主動式 AI 英文學習陪伴助手
+# Teacher — 主動式 AI 學習陪伴系統
 
-Teacher 是一個以「長期陪伴、持續學習、低干擾介入」為核心的 AI English Learning Companion。
+Teacher 是一個整合**長期記憶、學習狀態與多模態人機互動**的 local-first AI learning companion。它的核心不是把大型語言模型包成聊天介面，而是讓日常對話中的高價值學習訊號可以被保存、追蹤，並在未來的複習與主動互動中重新出現。
 
-它不是單純把大型語言模型包成聊天介面，而是把日常對話、Learning Signal、Learning Item、間隔複習、長期記憶與主動練習串成一條可持久化的學習循環。系統的重點是：哪些內容值得留下、什麼時候應該再次出現，以及如何讓學習狀態在多次對話之間保持一致。
+目前 prototype 以**英文語言學習**作為主要驗證情境，因此 Learning Signal、Help / Hint、`/say` 與 Review 等流程仍包含英語學習特定設計；但系統層的研究與實作重點是 Conversation、Learning State、Long-term Memory、Review / Practice、Proactive Interaction 與 multimodal input 之間如何形成可持久化的學習閉環。
 
 目前版本以 **macOS + Textual TUI** 為主要操作環境，核心功能已完成 target-Mac 實機驗收，可作為 v0.1.0 的展示與專題成果基準。
 
-> Teacher 的核心不是「每句話都糾正」，而是只保留高價值學習訊號，並在之後真正帶回來複習與練習。
+> Teacher 的核心不是「每句話都糾正」，而是把值得留下的學習訊號轉成可追蹤的學習狀態，並在之後真正帶回來複習與練習。
 
 ---
 
@@ -32,11 +32,21 @@ Future Conversation
 
 ---
 
+## 系統設計重點
+
+Teacher 把「生成回覆」與「更新學習狀態」視為不同責任。一般對話先完成 assistant response，再由後處理流程判斷是否有值得保留的 Learning Signal；只有通過來源、內容與信心驗證的訊號才會形成或合併 Learning Item。Long-term Memory 則保存與未來對話相關的使用者資訊，和需要再次練習的 Learning Item 分開管理。
+
+學習狀態由 FastAPI Core 與本機 persistence 管理，而不是交給 LLM 自行記住或直接改寫。Review / Practice 的 grading、stage transition、next review time、proactive eligibility 與 memory persistence 都有明確的 service boundary。Speech、gesture 與 camera preview 只作為既有互動流程的輸入方式，不建立另一套獨立 agent。
+
+這讓 Teacher 的重點從「一次回答得好不好」轉向「一次互動如何成為後續學習循環的一部分」。
+
+---
+
 ## 已完成的主要能力
 
 ### 一般對話與 Learning Signal
 
-使用者可以直接用英文與 Teacher 對話。每次成功對話完成後，系統會嘗試擷取最多一個高價值 learning signal，例如明顯的時態錯誤、拼字錯誤、可重複使用的片語或其他具體且適合形成複習題的修正。
+目前 prototype 的主要驗證方式是讓使用者直接用英文與 Teacher 對話。每次成功對話完成後，系統會嘗試擷取最多一個高價值 learning signal，例如明顯的時態錯誤、拼字錯誤、可重複使用的片語或其他具體且適合形成複習題的修正。
 
 例如：
 
@@ -97,6 +107,10 @@ Ctrl+X  取消本次錄音
 錄音有 30 秒安全上限。音訊只在記憶體中暫存成短 WAV，由 Core 使用 Groq Whisper (`whisper-large-v3-turbo`) 轉錄；UI 先顯示 transcript，再送進與打字答案相同的 grading path。
 
 麥克風或 STT 失敗時，不會破壞 review state，使用者仍可直接改用鍵盤回答。
+
+### Text-to-Speech（optional）
+
+Teacher 可在文字回覆顯示後，使用 ElevenLabs 將 learner-facing 回覆朗讀出來。TTS 預設關閉，只有在本機設定 `TTS_ENABLED=true` 並提供 API key 時啟用；若合成或播放失敗，文字互動仍維持可用，不會改變 conversation 或 learning state。
 
 ### Local Gesture + Camera Review
 
@@ -212,6 +226,7 @@ Teacher 的差異不在於提供更多聊天按鈕，而在於它維持跨時間
                │
                ├──► LLM Provider (Groq / Fake)
                ├──► STT (Groq Whisper)
+               ├──► TTS (ElevenLabs, optional)
                ├──► Embedding Provider (optional)
                ▼
 ┌──────────────────────────────┐
@@ -240,6 +255,7 @@ SQLite
 Pydantic v2
 Groq LLM
 Groq Whisper STT
+ElevenLabs TTS (optional)
 OpenAI-compatible Embeddings (optional)
 MediaPipe + OpenCV (optional gesture path)
 pytest / pytest-asyncio
