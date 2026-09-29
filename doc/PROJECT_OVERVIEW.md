@@ -2,9 +2,11 @@
 
 ## 專案定位
 
-Teacher 是一個以 macOS + Textual TUI 為主要操作環境的主動式 AI 英文學習陪伴系統。專案目標不是做一個「會聊天的英文機器人」，而是建立一個可以跨對話維持 learning state 的完整學習循環。
+Teacher 是一個以 macOS + Textual TUI 為主要操作環境的主動式 AI 學習陪伴系統，整合長期記憶、學習狀態與多模態人機互動。專案目標不是做一個「會聊天的英文機器人」，而是建立一個可以把日常互動轉成可持續學習狀態，並跨對話延續的完整學習循環。
 
-目前 v0.1.0 release baseline 已完成 target-Mac 實機驗收，功能重點包括：一般英文對話、Learning Signal、Learning Item、間隔複習、長期記憶、主動練習、語音回答與本機手勢互動。
+目前 prototype 以英文語言學習作為主要驗證情境，因此 Learning Signal、Help / Hint、`/say` 與 Review 仍包含英語學習特定設計；系統層的重點則是 Conversation、Learning Item、Long-term Memory、Review / Practice、Proactive Interaction 與 multimodal input 之間的狀態管理與責任邊界。
+
+目前 v0.1.0 release baseline 已完成 target-Mac 實機驗收，功能重點包括：一般對話、Learning Signal、Learning Item、間隔複習、長期記憶、主動練習、語音回答、可選 TTS 與本機手勢互動。
 
 核心循環：
 
@@ -31,6 +33,7 @@ Conversation
 | Review | 已完成 | due-first review、deterministic grading、bounded semantic fallback、attempt history | LLM 不直接修改 stage / scheduling |
 | Spaced Repetition | 已完成 | 1 / 3 / 7 / 14 / 30 天 stage schedule；錯誤回 stage 0 | 固定 policy，不是自適應 ML scheduler |
 | Spoken Review | 已完成 | 錄音、Groq Whisper STT、transcript、typed/spoken 共用 grading path | 音訊不持久化 |
+| Text-to-Speech | 可選 | ElevenLabs 朗讀 learner-facing 回覆；文字先顯示再啟動播放 | 預設關閉；合成或播放失敗不影響文字互動與 learning state |
 | Gesture Review | 已完成 | MediaPipe Thumb_Down hint、Thumb_Up review-complete acknowledgement | 不做自由手勢指令或一般 vision understanding |
 | Camera Preview | 已完成 | 本機彩色 terminal preview、camera index 選擇、latest-frame buffering | frame 不送 Core / LLM、不保存 |
 | Long-term Memory | 已完成 | 對話結束後抽取、category、search、soft delete、context recall | 不將全部 memory 塞入 prompt |
